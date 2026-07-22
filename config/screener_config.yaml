@@ -1,0 +1,143 @@
+presets:
+  Quality_Compounder:
+    label: "Quality Compounder"
+    description: "Companies with high ROE, consistent revenue growth, and strong cash flows"
+    filters:
+      - metric: roe
+        min: 15.0
+      - metric: revenue_cagr_3y
+        min: 10.0
+      - metric: cfo_quality
+        operator: equals
+        value: "High Quality"
+      - metric: debt_to_equity
+        max: 2.0
+      - metric: net_profit_margin
+        min: 10.0
+    exclude_financials_for:
+      - debt_to_equity
+    sort_by: roe
+    sort_order: desc
+    composite_weights:
+      profitability: 0.35
+      cash_quality: 0.30
+      growth: 0.20
+      leverage: 0.15
+
+  Value_Pick:
+    label: "Value Pick"
+    description: "Undervalued companies with reasonable fundamentals"
+    filters:
+      - metric: pe_ratio
+        max: 15.0
+      - metric: pb_ratio
+        max: 2.0
+      - metric: roe
+        min: 10.0
+      - metric: debt_to_equity
+        max: 1.5
+      - metric: dividend_yield
+        min: 2.0
+      - metric: interest_coverage
+        min: 2.0
+    exclude_financials_for:
+      - debt_to_equity
+    sort_by: pe_ratio
+    sort_order: asc
+    composite_weights:
+      profitability: 0.35
+      cash_quality: 0.30
+      growth: 0.20
+      leverage: 0.15
+
+  Growth_Accelerator:
+    label: "Growth Accelerator"
+    description: "High-growth companies with strong revenue and profit momentum"
+    filters:
+      - metric: revenue_cagr_5y
+        min: 15.0
+      - metric: pat_cagr_5y
+        min: 12.0
+      - metric: roe
+        min: 12.0
+      - metric: capex_intensity
+        operator: equals
+        value: "Capital Intensive"
+    sort_by: revenue_cagr_5y
+    sort_order: desc
+    composite_weights:
+      profitability: 0.25
+      cash_quality: 0.20
+      growth: 0.40
+      leverage: 0.15
+
+  Dividend_Champion:
+    label: "Dividend Champion"
+    description: "Consistent dividend payers with strong balance sheets"
+    filters:
+      - metric: dividend_yield
+        min: 3.0
+      - metric: roe
+        min: 12.0
+      - metric: payout_ratio
+        max: 60.0
+      - metric: debt_to_equity
+        max: 1.0
+      - metric: interest_coverage
+        min: 3.0
+    exclude_financials_for:
+      - debt_to_equity
+    sort_by: dividend_yield
+    sort_order: desc
+    composite_weights:
+      profitability: 0.30
+      cash_quality: 0.25
+      growth: 0.15
+      leverage: 0.30
+
+  Debt_Free_Blue_Chip:
+    label: "Debt-Free Blue Chip"
+    description: "Companies with zero or near-zero debt and strong fundamentals"
+    filters:
+      - metric: debt_to_equity
+        max: 0.1
+      - metric: market_cap
+        min: 10000
+      - metric: roe
+        min: 12.0
+      - metric: net_profit_margin
+        min: 8.0
+      - metric: interest_coverage
+        min: 0.0
+        treat_debt_free: true
+    exclude_financials_for:
+      - debt_to_equity
+    sort_by: market_cap
+    sort_order: desc
+    composite_weights:
+      profitability: 0.30
+      cash_quality: 0.30
+      growth: 0.20
+      leverage: 0.20
+
+  Turnaround_Watch:
+    label: "Turnaround Watch"
+    description: "Companies showing early signs of operational recovery"
+    filters:
+      - metric: revenue_cagr_3y
+        min: -5.0
+      - metric: roe
+        min: 5.0
+      - metric: interest_coverage
+        min: 1.0
+      - metric: debt_to_equity
+        max: 3.0
+    exclude_financials_for:
+      - debt_to_equity
+    sort_by: roe
+    sort_order: desc
+    composite_weights:
+      profitability: 0.25
+      cash_quality: 0.25
+      growth: 0.30
+      leverage: 0.20

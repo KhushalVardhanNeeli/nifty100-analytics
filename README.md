@@ -12,31 +12,122 @@ Built in 3 sprints, end-to-end. No shortcuts, no half-baked modules.
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Getting Started — A Walkthrough
+
+### What you'll need on your system
+
+- **Python 3.10 or higher** (3.11+ recommended)
+- **git** (to clone the repo)
+- About **200 MB of free space** (the SQLite database grows as you add years of data)
+- That's it. No Postgres, no Docker, no cloud account. Everything runs locally.
+
+### Step 1: Clone and set up
 
 ```bash
-# 1. Install dependencies
+# Grab the code
+git clone https://github.com/KhushalVardhanNeeli/nifty100-analytics.git
+cd nifty100-analytics
+
+# Install everything in one shot
 pip install -r requirements.txt
+```
 
-# 2. Create your .env file
-cp .env.example .env       # or just create one with DB_PATH=db/nifty100.db
+This pulls in ~20 packages — pandas for data wrangling, FastAPI for the web server, matplotlib for charts, SQLAlchemy for the database, pytest for testing. Nothing exotic.
 
-# 3. Drop your CSV/Excel files into data/
+### Step 2: The `.env` file
 
-# 4. Run the ETL pipeline (ingest + validate)
+The project expects a `.env` file with two settings. There's already one in the repo that works out of the box:
+
+```
+DB_PATH=db/nifty100.db
+DATA_DIR=data/
+```
+
+`db/nifty100.db` is where your SQLite database will live. `data/` is where you'll drop your raw files. If you're happy with these defaults, you don't need to change anything.
+
+### Step 3: Get your data ready
+
+This is the one bit you'll need to do yourself. The system expects **CSV, .xlsx, or .xls** files placed in the `data/` folder. Each file should contain financial statements for the Nifty 100 companies.
+
+Here's what the loader looks for and maps automatically:
+
+| File should contain | Look for columns like | Gets loaded into |
+|---------------------|----------------------|-------------------|
+| Company info | `ticker`, `company_name`, `sector_name`, `market_cap`, `isin` | `companies` table |
+| Profit & Loss | `year`, `sales`, `net_profit`, `eps`, `operating_profit`, `interest_expense` | `profitandloss` table |
+| Balance Sheet | `year`, `total_assets`, `total_liabilities`, `shareholders_equity`, `total_debt`, `cash_and_equivalents` | `balancesheet` table |
+| Cash Flow | `year`, `operating_activities`, `investing_activities`, `financing_activities`, `capex` | `cashflow` table |
+| Stock Prices | `trade_date`, `open`, `high`, `low`, `close`, `volume` | `stock_prices` table |
+
+Don't worry about exact column naming — the loader normalises everything to lowercase and strips whitespace, so `Net Profit`, `net_profit`, and `NET PROFIT ` all get picked up. Missing columns are simply skipped. Extra columns are ignored.
+
+> **Don't have Nifty 100 data?** You can test the pipeline with any CSV that has the columns above — even just 5-10 companies. The system will work fine. Screener.Trade, Tijori Finance, or Yahoo Finance are good sources if you're looking.
+
+### Step 4: Build the database
+
+```bash
 make load
+```
 
-# 5. Compute financial ratios
+This is the big one. It does three things:
+
+1. **Creates the 10-table schema** — companies, P&L, balance sheet, cash flow, stock prices, financial ratios, peer percentiles, sectors, analysis, and documents. All tables get proper primary keys, foreign keys, and indexes.
+2. **Normalises every row** — tickers get uppercased, years get extracted from strings like `"FY2020-21"`, numbers like `"1,23,45,678"` become floats, percentages like `"15.5%"` become `0.155`, sector names get standardised (`"it"` → `"Information Technology"`).
+3. **Runs 16 data quality checks** — duplicate primary keys, orphan foreign keys, balance sheet equations, OPM cross-checks, tax rate bounds, invalid URLs, and more. Every violation gets logged to `output/validation_failures.csv` with a severity label (CRITICAL or WARNING).
+
+When it finishes, you'll see a summary on screen and two CSV audit files in `output/`:
+
+- `load_audit.csv` — how many rows were loaded vs rejected per table
+- `validation_failures.csv` — which rules failed and where
+
+### Step 5: Compute the ratios
+
+```bash
 make ratios
 ```
 
-That's it. You now have a fully populated SQLite database with validated data and computed ratios. Want to screen companies against a preset?
+This reads the cleaned P&L, balance sheet, and cash flow data and computes **21 financial ratios** for every company, for every year. It populates the `financial_ratios` table.
+
+Smart edge cases are handled throughout:
+- Zero denominator? Returns `null` instead of crashing.
+- Negative equity? ROE and ROCE return `null` (meaningless metric).
+- Company has zero debt? D/E returns `0`, not `null` — because being debt-free is good information.
+- Financial sector with D/E > 5? Flagged as a warning (banks naturally run high leverage).
+- Interest expense of zero and operating profit positive? ICR is labelled "Debt Free" instead of infinite.
+- ICR between 0 and 1.5? Warning raised — this company might struggle to service its debt.
+
+### Step 6: Explore the results
+
+Now the fun part. You can:
 
 ```bash
-make report    # exports screener_output.xlsx with color-coded results
-make radar     # generates radar charts for every company
-make api       # starts the FastAPI server at http://localhost:8000
+# Screen companies against any of the 6 investment presets
+make report    # → output/screener_output.xlsx (color-coded Excel)
+
+# Compare companies against their peers
+make export    # → output/peer_comparison.xlsx (11 sheets, one per sector)
+
+# Generate radar charts for visual comparison
+make radar     # → reports/radar_charts/ (PNG files, 300 DPI)
+
+# Start the API and explore in your browser
+make api       # → http://localhost:8000
 ```
+
+The API gives you:
+- `http://localhost:8000/companies` — browse all companies, filter by sector
+- `http://localhost:8000/ratios/1` — get all ratios for company ID 1
+- `http://localhost:8000/screener/Quality_Compounder` — run a preset and get JSON results
+- `http://localhost:8000/dashboard` — summary stats at a glance
+
+### That's the whole flow
+
+```
+CSV/Excel files → make load → make ratios → make report / radar / api
+   (30 sec)        (10 sec)      (5 sec)         (instant)
+```
+
+Under a minute from raw data to interactive dashboard. All local, all yours.
 
 ---
 

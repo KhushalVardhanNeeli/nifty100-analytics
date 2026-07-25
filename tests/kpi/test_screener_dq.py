@@ -60,10 +60,10 @@ class TestValidatorIntegration:
              "message": "Negative cash"}
         ])
         v.dq08_tax_rate = MagicMock(return_value=[])
-        v.dq09_dividend_payout = MagicMock(return_value=[])
+        v.dq09_dividend_cap = MagicMock(return_value=[])
         v.dq10_valid_urls = MagicMock(return_value=[])
         v.dq11_eps_sign = MagicMock(return_value=[])
-        v.dq12_ca_cl_balance = MagicMock(return_value=[])
+        v.dq12_bs_equity_balance = MagicMock(return_value=[])
         v.dq13_coverage = MagicMock(return_value=[])
         v.dq14_year_range = MagicMock(return_value=[])
         v.dq15_no_duplicate_tickers = MagicMock(return_value=[])
@@ -97,10 +97,10 @@ class TestValidatorIntegration:
              "message": "Negative cash"}
         ])
         v.dq08_tax_rate = MagicMock(return_value=[])
-        v.dq09_dividend_payout = MagicMock(return_value=[])
+        v.dq09_dividend_cap = MagicMock(return_value=[])
         v.dq10_valid_urls = MagicMock(return_value=[])
         v.dq11_eps_sign = MagicMock(return_value=[])
-        v.dq12_ca_cl_balance = MagicMock(return_value=[])
+        v.dq12_bs_equity_balance = MagicMock(return_value=[])
         v.dq13_coverage = MagicMock(return_value=[])
         v.dq14_year_range = MagicMock(return_value=[])
         v.dq15_no_duplicate_tickers = MagicMock(return_value=[])
@@ -125,10 +125,10 @@ class TestValidatorIntegration:
         v.dq06_positive_sales = MagicMock(return_value=[])
         v.dq07_net_cash = MagicMock(return_value=[])
         v.dq08_tax_rate = MagicMock(return_value=[])
-        v.dq09_dividend_payout = MagicMock(return_value=[])
+        v.dq09_dividend_cap = MagicMock(return_value=[])
         v.dq10_valid_urls = MagicMock(return_value=[])
         v.dq11_eps_sign = MagicMock(return_value=[])
-        v.dq12_ca_cl_balance = MagicMock(return_value=[])
+        v.dq12_bs_equity_balance = MagicMock(return_value=[])
         v.dq13_coverage = MagicMock(return_value=[])
         v.dq14_year_range = MagicMock(return_value=[])
         v.dq15_no_duplicate_tickers = MagicMock(return_value=[])
@@ -141,7 +141,7 @@ class TestValidatorIntegration:
         v = DQValidator.__new__(DQValidator)
         v.engine = MagicMock()
 
-        dup_df = pd.DataFrame({"company_id": [1, 1, 2]})
+        dup_df = pd.DataFrame({"pk": [1, 1, 2]})
 
         def _respond(sql, params=None):
             return dup_df
@@ -150,7 +150,7 @@ class TestValidatorIntegration:
         failures = v.dq01_pk_uniqueness()
         assert len(failures) >= 1
 
-        clean_companies = pd.DataFrame({"company_id": [1, 2, 3]})
+        clean_companies = pd.DataFrame({"pk": [1, 2, 3]})
         clean_empty = pd.DataFrame()
 
         def _respond_clean(sql, params=None):
@@ -179,11 +179,10 @@ class TestValidatorIntegration:
 
     def test_failure_export_format(self):
         failures = [
-            {"table": "companies", "company_id": 1, "year": 2022,
-             "rule": "DQ-01", "severity": "CRITICAL", "message": "Duplicate PK"},
-            {"table": "profitandloss", "company_id": 2, "year": 2021,
-             "rule": "DQ-06", "severity": "CRITICAL",
-             "message": "Non-positive sales: -500"},
+            {"company_id": 1, "field": "company_id", "issue": "Duplicate PK",
+             "severity": "CRITICAL", "rule": "DQ-01", "year": 2022, "table": "companies"},
+            {"company_id": 2, "field": "sales", "issue": "Non-positive sales: -500",
+             "severity": "CRITICAL", "rule": "DQ-06", "year": 2021, "table": "profitandloss"},
         ]
 
         v = DQValidator.__new__(DQValidator)
@@ -196,7 +195,7 @@ class TestValidatorIntegration:
             v.export_failures(failures, tmp_path)
             assert os.path.exists(tmp_path)
             exported = pd.read_csv(tmp_path)
-            required_cols = ["table", "company_id", "year", "rule", "severity", "message"]
+            required_cols = ["company_id", "field", "issue", "severity"]
             for col in required_cols:
                 assert col in exported.columns
             assert len(exported) == 2

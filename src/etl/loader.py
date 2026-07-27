@@ -1,608 +1,470 @@
-"""ETL Pipeline — Nifty 100 Financial Intelligence Platform.
+"""ETL Pipeline — Nifty 100 Financial Analytics (spec-aligned).
 
-Loads data from Excel files in data/raw/ and data/supporting/, normalises columns,
-merges sector data, creates ticker-to-company_id mapping, and populates SQLite.
+Loads 12 source files (7 core + 5 supplementary) into a 12-table SQLite
+database. Handles:
+  * 2-digit fiscal years ("Mar-13" -> 2013)
+  * "TTM" rows (excluded, logged as rejected)
+  * 9 extra companies present in the financial statements but absent from
+    companies.xlsx / sectors.xlsx / market_cap.xlsx (added so FK=0)
+  * duplicate (company_id, year) rows (deduped, keep-first)
 """
 
 import csv
 import logging
 import os
-import re
 from pathlib import Path
-from typing import Optional
 
 import pandas as pd
-import numpy as np
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 
-from src.etl.normaliser import normalize_ticker, normalize_year, normalize_numeric
+from src.etl.normaliser import normalize_ticker, normalize_year
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("etl")
 
+# 9 tickers found in the financial statements but missing from the reference
+# files. Best-effort company names so FK integrity is preserved across all tables.
+EXTRA_COMPANY_NAMES = {
+    "AGTL": "Adani Total Gas Ltd",
+    "ULTRACEMCO": "UltraTech Cement Ltd",
+    "UNIONBANK": "Union Bank of India",
+    "UNITDSPR": "United Spirits Ltd",
+    "VBL": "Varun Beverages Ltd",
+    "VEDL": "Vedanta Ltd",
+    "WIPRO": "Wipro Ltd",
+    "ZOMATO": "Zomato Ltd",
+    "ZYDUSLIFE": "Zydus Lifesciences Ltd",
+}
 
-def _extract_years_from_string(s: str) -> Optional[int]:
-    """Extract the first 4-digit year from a string like 'Dec 2012' or 'Mar-13'."""
-    if s is None:
+RAW_HEADER_ROW = 1
+SUPP_HEADER_ROW = 0
+
+TABLES = [
+    "companies", "sectors", "profitandloss", "balancesheet", "cashflow",
+    "analysis", "documents", "prosandcons", "stock_prices",
+    "financial_ratios", "peer_groups", "market_cap",
+]
+
+# Drop order: children before parents so foreign-key constraints never break.
+DROP_ORDER = [
+    "profitandloss", "balancesheet", "cashflow", "stock_prices",
+    "analysis", "documents", "prosandcons", "financial_ratios",
+    "peer_groups", "market_cap",
+    "companies", "sectors",
+]
+
+
+def _f(v):
+    """Coerce a scalar to float, or None if NaN/None."""
+    if v is None:
         return None
-    if isinstance(s, (int, float)):
-        if pd.isna(s):
+    try:
+        if pd.isna(v):
             return None
-        y = int(s)
-        return y if 1900 <= y <= 2100 else None
-    s = str(s).strip()
-    match = re.search(r"(19[0-9]{2}|20[0-9]{2}|2100)", s)
-    if match:
-        return int(match.group(0))
-    return None
+    except (ValueError, TypeError):
+        pass
+    try:
+        return float(v)
+    except (ValueError, TypeError):
+        return None
 
 
 class ETLPipeline:
-    """Orchestrates data loading from raw Excel files into SQLite."""
-
-    RAW_HEADER_ROW = 1
-    SUPP_HEADER_ROW = 0
+    """Orchestrates loading raw Excel files into SQLite."""
 
     def __init__(self, data_dir: str = "data/", db_path: str = "db/nifty100.db"):
         self.data_dir = Path(data_dir)
         self.db_path = Path(db_path)
         os.makedirs(self.db_path.parent, exist_ok=True)
         self.engine = create_engine(f"sqlite:///{db_path}")
-        self._init_schema()
+
+        @event.listens_for(self.engine, "connect")
+        def _fk_on(dbapi_conn, _record):
+            cur = dbapi_conn.cursor()
+            cur.execute("PRAGMA foreign_keys=ON")
+            cur.close()
+
         self._ticker_to_id: dict[str, int] = {}
-        self.counts: dict[str, dict[str, int]] = {}
+        self.counts: dict[str, dict] = {}
+        self._init_schema()
+
+    # ── Schema ───────────────────────────────────────────────────────
 
     def _init_schema(self) -> None:
         schema_path = self.db_path.parent / "schema.sql"
         if not schema_path.exists():
             raise FileNotFoundError(f"Schema not found: {schema_path}")
-        with open(schema_path) as f:
-            sql = f.read()
-        with self.engine.begin() as conn:
+        sql = schema_path.read_text()
+        # Use a raw sqlite3 connection with foreign_keys OFF so we can drop any
+        # leftover tables (including older-schema tables) regardless of FK order.
+        import sqlite3
+        raw = sqlite3.connect(str(self.db_path))
+        try:
+            raw.execute("PRAGMA foreign_keys=OFF")
+            rows = raw.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()
+            for (name,) in rows:
+                raw.execute(f'DROP TABLE IF EXISTS "{name}"')
+            raw.commit()
             for stmt in sql.split(";"):
                 stmt = stmt.strip()
                 if stmt:
-                    conn.execute(text(stmt))
-
-    # ── Helpers ──────────────────────────────────────────────────────────
+                    raw.execute(stmt)
+            raw.commit()
+        finally:
+            raw.close()
 
     def _load_excel(self, path: Path, header_row: int = 0) -> pd.DataFrame:
         df = pd.read_excel(path, engine="openpyxl", header=header_row)
         df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
-        # Drop completely empty rows
         df = df.dropna(how="all")
         return df
 
-    def _make_ticker_map(self) -> dict[str, int]:
+    def _ticker_map(self) -> dict[str, int]:
         if self._ticker_to_id:
             return self._ticker_to_id
-        try:
-            df = pd.read_sql("SELECT company_id, ticker FROM companies", self.engine)
-            self._ticker_to_id = dict(
-                zip(df["ticker"].str.upper().str.strip(), df["company_id"])
-            )
-        except Exception:
-            self._ticker_to_id = {}
+        df = pd.read_sql("SELECT company_id, ticker FROM companies", self.engine)
+        self._ticker_to_id = {t: int(i) for t, i in zip(df["ticker"].str.upper().str.strip(), df["company_id"])}
         return self._ticker_to_id
 
-    def _resolve_company_id(self, ticker: Optional[str]) -> Optional[int]:
-        if ticker is None:
-            return None
+    def _resolve(self, ticker):
         t = normalize_ticker(ticker)
-        if not t:
-            return None
-        mapping = self._make_ticker_map()
-        return mapping.get(t)
+        return self._ticker_map().get(t) if t else None
 
-    def _load_years(self, df: pd.DataFrame, col: str = "year") -> pd.Series:
-        """Extract numeric years from string column like 'Dec 2012'."""
-        return df[col].apply(_extract_years_from_string)
+    def _load_many(self, table, records):
+        if not records:
+            return
+        df = pd.DataFrame(records)
+        df.to_sql(table, self.engine, if_exists="append", index=False)
 
-    # ── Phase 1: Companies ───────────────────────────────────────────────
+    # ── Phase 1: Companies + reference data ──────────────────────────
 
     def load_companies(self) -> None:
-        """Load companies.xlsx and sectors.xlsx, build companies table."""
         path = self.data_dir / "raw" / "companies.xlsx"
-        if not path.exists():
-            logger.warning("companies.xlsx not found")
-            return
-
-        df = self._load_excel(path, header_row=self.RAW_HEADER_ROW)
-        logger.info(f"companies.xlsx: {len(df)} rows")
-
-        # Map columns
-        result = []
+        df = self._load_excel(path, header_row=RAW_HEADER_ROW)
+        records = []
         for _, row in df.iterrows():
             ticker = normalize_ticker(row.get("id"))
             if not ticker:
                 continue
-            result.append({
+            records.append({
                 "ticker": ticker,
-                "company_name": str(row.get("company_name", "")).strip(),
-                "sector_name": None,  # filled in later
-                "industry": None,
-                "market_cap": None,
-                "listing_status": "Active",
-                "isin": None,
-                "bse_code": str(row.get("bse_profile", "")).strip() or None,
-                "nse_symbol": str(row.get("nse_profile", "")).strip() or None,
-                "founded_year": None,
-                "website": str(row.get("website", "")).strip() or None,
+                "company_name": str(row.get("company_name", "") or "").strip() or None,
+                "about_company": str(row.get("about_company", "") or "").strip() or None,
+                "website": str(row.get("website", "") or "").strip() or None,
+                "nse_symbol": str(row.get("nse_profile", "") or "").strip() or None,
+                "bse_code": str(row.get("bse_profile", "") or "").strip() or None,
+                "face_value": _f(row.get("face_value")),
+                "book_value": _f(row.get("book_value")),
+                "roe_percentage": _f(row.get("roe_percentage")),
+                "roce_percentage": _f(row.get("roce_percentage")),
             })
+        self._load_many("companies", records)
+        self.counts["companies"] = {"loaded": len(records), "rejected": 0}
+        logger.info(f"Loaded {len(records)} companies from companies.xlsx")
 
-        result_df = pd.DataFrame(result)
-        with self.engine.begin() as conn:
-            conn.execute(text("DELETE FROM companies"))
-        result_df.to_sql("companies", self.engine, if_exists="append", index=False)
-        self.counts["companies"] = {"loaded": len(result_df), "rejected": 0}
-        logger.info(f"Loaded {len(result_df)} companies")
+    def _extra_tickers(self) -> set:
+        """Discover tickers in financial statements not yet in companies."""
+        known = set(self._ticker_map().keys()) if self._ticker_to_id else {
+            normalize_ticker(t) for t in pd.read_sql("SELECT ticker FROM companies", self.engine)["ticker"]
+        }
+        found = set()
+        for name in ["profitandloss", "balancesheet", "cashflow"]:
+            p = self.data_dir / "raw" / f"{name}.xlsx"
+            if not p.exists():
+                continue
+            d = self._load_excel(p, header_row=RAW_HEADER_ROW)
+            if "company_id" in d.columns:
+                for v in d["company_id"].dropna().unique():
+                    t = normalize_ticker(v)
+                    if t and t not in known:
+                        found.add(t)
+        return found
 
-    def load_sectors_and_link(self) -> None:
-        """Load sectors.xlsx and update companies with sector names."""
+    def load_extra_companies(self) -> None:
+        extras = self._extra_tickers()
+        if not extras:
+            return
+        records = []
+        for ticker in sorted(extras):
+            records.append({
+                "ticker": ticker,
+                "company_name": EXTRA_COMPANY_NAMES.get(ticker, ticker),
+            })
+        self._load_many("companies", records)
+        self.counts["extra_companies"] = {"loaded": len(records), "rejected": 0}
+        logger.info(f"Added {len(records)} extra companies not in reference files: {sorted(extras)}")
+
+    def load_sectors(self) -> None:
         path = self.data_dir / "supporting" / "sectors.xlsx"
         if not path.exists():
-            logger.warning("sectors.xlsx not found")
             return
-
-        df = self._load_excel(path, header_row=self.SUPP_HEADER_ROW)
-        logger.info(f"sectors.xlsx: {len(df)} rows")
-
-        ticker_map = self._make_ticker_map()
+        df = self._load_excel(path, header_row=SUPP_HEADER_ROW)
+        ticker_map = self._ticker_map()
+        sector_names = []
+        updates = []
+        for _, row in df.iterrows():
+            ticker = normalize_ticker(row.get("company_id"))
+            broad = str(row.get("broad_sector", "") or "").strip()
+            sub = str(row.get("sub_sector", "") or "").strip()
+            if broad:
+                sector_names.append(broad)
+            cid = ticker_map.get(ticker) if ticker else None
+            if cid is not None:
+                updates.append({
+                    "company_id": cid,
+                    "broad_sector": broad or None,
+                    "sub_sector": sub or None,
+                    "index_weight_pct": _f(row.get("index_weight_pct")),
+                    "market_cap_category": str(row.get("market_cap_category", "") or "").strip() or None,
+                })
         with self.engine.begin() as conn:
-            for _, row in df.iterrows():
-                ticker = normalize_ticker(row.get("company_id"))
-                if not ticker or ticker not in ticker_map:
-                    continue
-                cid = ticker_map[ticker]
-                sector = str(row.get("broad_sector", "")).strip()
-                sub_sector = str(row.get("sub_sector", "")).strip()
-                market_cat = str(row.get("market_cap_category", "")).strip()
-                index_wt = row.get("index_weight_pct")
-
-                conn.execute(
-                    text(
-                        "UPDATE companies SET sector_name = :sector, industry = :sub, "
-                        "listing_status = :mcat WHERE company_id = :cid"
-                    ),
-                    {"sector": sector, "sub": sub_sector, "mcat": market_cat, "cid": cid},
-                )
-
-        # Also populate sectors table
-        sector_names = (
-            self._load_excel(path, header_row=self.SUPP_HEADER_ROW)["broad_sector"]
-            .dropna()
-            .unique()
-        )
-        sector_df = pd.DataFrame(
-            [{"sector_name": s} for s in sector_names if s.strip()]
-        )
-        if not sector_df.empty:
-            with self.engine.begin() as conn:
-                conn.execute(text("DELETE FROM sectors"))
-            sector_df.to_sql("sectors", self.engine, if_exists="append", index=False)
-        logger.info(f"Linked sectors to companies, {len(sector_df)} unique sectors")
+            for u in updates:
+                conn.execute(text(
+                    "UPDATE companies SET broad_sector=:b, sub_sector=:s, "
+                    "index_weight_pct=:w, market_cap_category=:m WHERE company_id=:c"
+                ), {"b": u["broad_sector"], "s": u["sub_sector"],
+                    "w": u["index_weight_pct"], "m": u["market_cap_category"], "c": u["company_id"]})
+        unique = sorted({s for s in sector_names if s})
+        self._load_many("sectors", [{"sector_name": s} for s in unique])
+        self.counts["sectors"] = {"loaded": len(unique), "rejected": 0}
+        logger.info(f"Linked sectors for {len(updates)} companies; {len(unique)} unique sectors")
 
     def load_market_cap(self) -> None:
-        """Load market_cap.xlsx and update companies with latest market cap."""
         path = self.data_dir / "supporting" / "market_cap.xlsx"
         if not path.exists():
-            logger.warning("market_cap.xlsx not found")
             return
+        df = self._load_excel(path, header_row=SUPP_HEADER_ROW)
+        ticker_map = self._ticker_map()
+        records = []
+        for _, row in df.iterrows():
+            ticker = normalize_ticker(row.get("company_id"))
+            cid = ticker_map.get(ticker) if ticker else None
+            if cid is None:
+                continue
+            year = normalize_year(row.get("year"))
+            records.append({
+                "company_id": cid,
+                "year": year,
+                "market_cap_crore": _f(row.get("market_cap_crore")),
+                "enterprise_value_crore": _f(row.get("enterprise_value_crore")),
+                "pe_ratio": _f(row.get("pe_ratio")),
+                "pb_ratio": _f(row.get("pb_ratio")),
+                "ev_ebitda": _f(row.get("ev_ebitda")),
+                "dividend_yield_pct": _f(row.get("dividend_yield_pct")),
+            })
+        rec_df = pd.DataFrame(records).drop_duplicates(subset=["company_id", "year"], keep="first")
+        rec_df.to_sql("market_cap", self.engine, if_exists="append", index=False)
 
-        df = self._load_excel(path, header_row=self.SUPP_HEADER_ROW)
-        logger.info(f"market_cap.xlsx: {len(df)} rows")
-        ticker_map = self._make_ticker_map()
-
-        # Use the most recent year's market_cap for each company
-        latest = (
-            df.sort_values("year", ascending=False)
-            .groupby("company_id")
-            .first()
-            .reset_index()
-        )
-
-        mcap_records = []
+        latest = rec_df.sort_values("year").groupby("company_id").tail(1)
         with self.engine.begin() as conn:
             for _, row in latest.iterrows():
-                ticker = normalize_ticker(row.get("company_id"))
-                if not ticker or ticker not in ticker_map:
-                    continue
-                cid = ticker_map[ticker]
-                mcap = row.get("market_cap_crore")
-                ev = row.get("enterprise_value_crore")
+                conn.execute(text("UPDATE companies SET market_cap_crore=:m WHERE company_id=:c"),
+                             {"m": row["market_cap_crore"], "c": int(row["company_id"])})
+        self.counts["market_cap"] = {"loaded": len(rec_df), "rejected": 0}
+        logger.info(f"Loaded market_cap: {len(rec_df)} rows")
 
-                mcap_records.append({
-                    "company_id": cid,
-                    "year": int(row["year"]) if pd.notna(row.get("year")) else None,
-                    "market_cap_crore": float(mcap) if pd.notna(mcap) else None,
-                    "enterprise_value_crore": float(ev) if pd.notna(ev) else None,
-                    "pe_ratio": float(row["pe_ratio"]) if pd.notna(row.get("pe_ratio")) else None,
-                    "pb_ratio": float(row["pb_ratio"]) if pd.notna(row.get("pb_ratio")) else None,
-                    "ev_ebitda": float(row["ev_ebitda"]) if pd.notna(row.get("ev_ebitda")) else None,
-                    "dividend_yield_pct": float(row["dividend_yield_pct"]) if pd.notna(row.get("dividend_yield_pct")) else None,
-                })
+    # ── Phase 2: Financial statements ────────────────────────────────
 
-                conn.execute(
-                    text("UPDATE companies SET market_cap = :mcap WHERE company_id = :cid"),
-                    {"mcap": float(mcap) if pd.notna(mcap) else None, "cid": cid},
-                )
-
-        if mcap_records:
-            mcap_df = pd.DataFrame(mcap_records)
-            with self.engine.begin() as conn:
-                conn.execute(text("DELETE FROM market_cap_annual"))
-            mcap_df.to_sql("market_cap_annual", self.engine, if_exists="append", index=False)
-
-        logger.info(f"Loaded market cap for {len(mcap_records)} companies")
-
-    # ── Phase 2: Financial Statements ────────────────────────────────────
+    def _load_financial(self, table, filename, row_map):
+        path = self.data_dir / "raw" / f"{filename}.xlsx"
+        if not path.exists():
+            return
+        df = self._load_excel(path, header_row=RAW_HEADER_ROW)
+        records, rejected = [], 0
+        for _, row in df.iterrows():
+            ticker = normalize_ticker(row.get("company_id"))
+            cid = self._resolve(ticker)
+            year = normalize_year(row.get("year"))
+            if cid is None or year is None:
+                rejected += 1
+                continue
+            rec = row_map(row, cid, year)
+            if rec is not None:
+                records.append(rec)
+        rec_df = pd.DataFrame(records).drop_duplicates(subset=["company_id", "year"], keep="first")
+        rec_df.to_sql(table, self.engine, if_exists="append", index=False)
+        self.counts[table] = {"loaded": len(rec_df), "rejected": rejected}
+        logger.info(f"Loaded {len(rec_df)} {table} rows, {rejected} rejected")
 
     def load_profitandloss(self) -> None:
-        path = self.data_dir / "raw" / "profitandloss.xlsx"
-        if not path.exists():
-            logger.warning("profitandloss.xlsx not found")
-            return
-
-        df = self._load_excel(path, header_row=self.RAW_HEADER_ROW)
-        logger.info(f"profitandloss.xlsx: {len(df)} rows")
-
-        ticker_map = self._make_ticker_map()
-        records, rejected = [], 0
-
-        for _, row in df.iterrows():
-            ticker = normalize_ticker(row.get("company_id"))
-            cid = self._resolve_company_id(ticker)
-            if cid is None:
-                rejected += 1
-                continue
-
-            yr = _extract_years_from_string(row.get("year"))
-            if yr is None:
-                rejected += 1
-                continue
-
-            rec = {
-                "company_id": cid,
-                "year": yr,
-                "sales": float(row["sales"]) if pd.notna(row.get("sales")) else None,
-                "operating_profit": float(row["operating_profit"]) if pd.notna(row.get("operating_profit")) else None,
-                "operating_profit_margin": (
-                    float(row["opm_percentage"]) / 100 if pd.notna(row.get("opm_percentage")) else None
-                ),
-                "net_profit": float(row["net_profit"]) if pd.notna(row.get("net_profit")) else None,
-                "eps": float(row["eps"]) if pd.notna(row.get("eps")) else None,
-                "dividend_payout_pct": (
-                    float(row["dividend_payout"]) / 100 if pd.notna(row.get("dividend_payout")) else None
-                ),
-                "tax_rate": (
-                    float(row["tax_percentage"]) / 100 if pd.notna(row.get("tax_percentage")) else None
-                ),
-                "depreciation": float(row["depreciation"]) if pd.notna(row.get("depreciation")) else None,
-                "interest_expense": float(row.get("interest", row.get("interest_expense"))) if pd.notna(row.get("interest", row.get("interest_expense", pd.NA))) else None,
-                "other_income": float(row["other_income"]) if pd.notna(row.get("other_income")) else None,
-                "total_revenue": float(row["sales"]) if pd.notna(row.get("sales")) else None,
-                "cogs": float(row["expenses"]) if pd.notna(row.get("expenses")) else None,
-                "employee_cost": None,
+        def mapper(row, cid, year):
+            return {
+                "company_id": cid, "year": year,
+                "sales": _f(row.get("sales")), "expenses": _f(row.get("expenses")),
+                "operating_profit": _f(row.get("operating_profit")),
+                "opm_percentage": _f(row.get("opm_percentage")),
+                "other_income": _f(row.get("other_income")), "interest": _f(row.get("interest")),
+                "depreciation": _f(row.get("depreciation")),
+                "profit_before_tax": _f(row.get("profit_before_tax")),
+                "tax_percentage": _f(row.get("tax_percentage")),
+                "net_profit": _f(row.get("net_profit")), "eps": _f(row.get("eps")),
+                "dividend_payout": _f(row.get("dividend_payout")),
             }
-            records.append(rec)
-
-        result_df = pd.DataFrame(records)
-        result_df = result_df.drop_duplicates(subset=["company_id", "year"], keep="first")
-        with self.engine.begin() as conn:
-            conn.execute(text("DELETE FROM profitandloss"))
-        result_df.to_sql("profitandloss", self.engine, if_exists="append", index=False)
-        self.counts["pnl"] = {"loaded": len(result_df), "rejected": rejected}
-        logger.info(f"Loaded {len(result_df)} P&L rows, {rejected} rejected")
+        self._load_financial("profitandloss", "profitandloss", mapper)
 
     def load_balancesheet(self) -> None:
-        path = self.data_dir / "raw" / "balancesheet.xlsx"
-        if not path.exists():
-            logger.warning("balancesheet.xlsx not found")
-            return
-
-        df = self._load_excel(path, header_row=self.RAW_HEADER_ROW)
-        logger.info(f"balancesheet.xlsx: {len(df)} rows")
-
-        ticker_map = self._make_ticker_map()
-        records, rejected = [], 0
-
-        for _, row in df.iterrows():
-            ticker = normalize_ticker(row.get("company_id"))
-            cid = self._resolve_company_id(ticker)
-            if cid is None:
-                rejected += 1
-                continue
-
-            yr = _extract_years_from_string(row.get("year"))
-            if yr is None:
-                rejected += 1
-                continue
-
-            equity = float(row.get("equity_capital") or 0)
-            reserves = float(row.get("reserves") or 0)
-            borrowings = float(row.get("borrowings") or 0)
-            other_liab = float(row.get("other_liabilities") or 0)
-
-            rec = {
-                "company_id": cid,
-                "year": yr,
-                "total_assets": float(row["total_assets"]) if pd.notna(row.get("total_assets")) else None,
-                "total_liabilities": float(row["total_liabilities"]) if pd.notna(row.get("total_liabilities")) else None,
-                "shareholders_equity": equity + reserves,
-                "total_debt": borrowings,
-                "current_assets": None,
-                "current_liabilities": None,
-                "cash_and_equivalents": None,
-                "inventory": None,
-                "trade_receivables": None,
-                "investments": float(row["investments"]) if pd.notna(row.get("investments")) else None,
-                "fixed_assets": float(row["fixed_assets"]) if pd.notna(row.get("fixed_assets")) else None,
-                "intangible_assets": None,
-                "borrowings_current": borrowings,
-                "borrowings_noncurrent": None,
+        def mapper(row, cid, year):
+            return {
+                "company_id": cid, "year": year,
+                "equity_capital": _f(row.get("equity_capital")), "reserves": _f(row.get("reserves")),
+                "borrowings": _f(row.get("borrowings")), "other_liabilities": _f(row.get("other_liabilities")),
+                "total_liabilities": _f(row.get("total_liabilities")), "fixed_assets": _f(row.get("fixed_assets")),
+                "cwip": _f(row.get("cwip")), "investments": _f(row.get("investments")),
+                "other_asset": _f(row.get("other_asset")), "total_assets": _f(row.get("total_assets")),
             }
-            records.append(rec)
-
-        result_df = pd.DataFrame(records)
-        result_df = result_df.drop_duplicates(subset=["company_id", "year"], keep="first")
-        with self.engine.begin() as conn:
-            conn.execute(text("DELETE FROM balancesheet"))
-        result_df.to_sql("balancesheet", self.engine, if_exists="append", index=False)
-        self.counts["bs"] = {"loaded": len(result_df), "rejected": rejected}
-        logger.info(f"Loaded {len(result_df)} BS rows, {rejected} rejected")
+        self._load_financial("balancesheet", "balancesheet", mapper)
 
     def load_cashflow(self) -> None:
-        path = self.data_dir / "raw" / "cashflow.xlsx"
-        if not path.exists():
-            logger.warning("cashflow.xlsx not found")
-            return
-
-        df = self._load_excel(path, header_row=self.RAW_HEADER_ROW)
-        logger.info(f"cashflow.xlsx: {len(df)} rows")
-
-        ticker_map = self._make_ticker_map()
-        records, rejected = [], 0
-
-        for _, row in df.iterrows():
-            ticker = normalize_ticker(row.get("company_id"))
-            cid = self._resolve_company_id(ticker)
-            if cid is None:
-                rejected += 1
-                continue
-
-            yr = _extract_years_from_string(row.get("year"))
-            if yr is None:
-                rejected += 1
-                continue
-
-            oa = float(row.get("operating_activity") or 0)
-            ia = float(row.get("investing_activity") or 0)
-            fa = float(row.get("financing_activity") or 0)
-
-            rec = {
-                "company_id": cid,
-                "year": yr,
-                "operating_activities": oa,
-                "investing_activities": ia,
-                "financing_activities": fa,
-                "net_cash_flow": float(row["net_cash_flow"]) if pd.notna(row.get("net_cash_flow")) else (oa + ia + fa),
-                "capex": abs(ia) if ia < 0 else 0,  # capex is typically negative investing cf
-                "fcf": oa + ia,
-                "dividends_paid": None,
+        def mapper(row, cid, year):
+            return {
+                "company_id": cid, "year": year,
+                "operating_activity": _f(row.get("operating_activity")),
+                "investing_activity": _f(row.get("investing_activity")),
+                "financing_activity": _f(row.get("financing_activity")),
+                "net_cash_flow": _f(row.get("net_cash_flow")),
             }
-            records.append(rec)
+        self._load_financial("cashflow", "cashflow", mapper)
 
-        result_df = pd.DataFrame(records)
-        result_df = result_df.drop_duplicates(subset=["company_id", "year"], keep="first")
-        with self.engine.begin() as conn:
-            conn.execute(text("DELETE FROM cashflow"))
-        result_df.to_sql("cashflow", self.engine, if_exists="append", index=False)
-        self.counts["cf"] = {"loaded": len(result_df), "rejected": rejected}
-        logger.info(f"Loaded {len(result_df)} CF rows, {rejected} rejected")
-
-    # ── Phase 3: Supporting Data ─────────────────────────────────────────
+    # ── Phase 3: Supplementary data ──────────────────────────────────
 
     def load_stock_prices(self) -> None:
         path = self.data_dir / "supporting" / "stock_prices.xlsx"
         if not path.exists():
-            logger.warning("stock_prices.xlsx not found")
             return
-
-        df = self._load_excel(path, header_row=self.SUPP_HEADER_ROW)
-        logger.info(f"stock_prices.xlsx: {len(df)} rows")
-
-        ticker_map = self._make_ticker_map()
+        df = self._load_excel(path, header_row=SUPP_HEADER_ROW)
         records, rejected = [], 0
-
         for _, row in df.iterrows():
-            ticker = normalize_ticker(row.get("company_id"))
-            cid = self._resolve_company_id(ticker)
+            cid = self._resolve(row.get("company_id"))
             if cid is None:
                 rejected += 1
                 continue
-
-            rec = {
+            records.append({
                 "company_id": cid,
-                "trade_date": str(row.get("date", "")).strip(),
-                "open": float(row["open_price"]) if pd.notna(row.get("open_price")) else None,
-                "high": float(row["high_price"]) if pd.notna(row.get("high_price")) else None,
-                "low": float(row["low_price"]) if pd.notna(row.get("low_price")) else None,
-                "close": float(row.get("close_price", row.get("adjusted_close"))) if pd.notna(row.get("close_price", row.get("adjusted_close", pd.NA))) else None,
+                "date": str(row.get("date", "") or "").strip(),
+                "open_price": _f(row.get("open_price")), "high_price": _f(row.get("high_price")),
+                "low_price": _f(row.get("low_price")), "close_price": _f(row.get("close_price")),
                 "volume": int(row["volume"]) if pd.notna(row.get("volume")) else None,
-            }
-            records.append(rec)
-
-        result_df = pd.DataFrame(records)
-        result_df = result_df.drop_duplicates(subset=["company_id", "trade_date"], keep="first")
-        with self.engine.begin() as conn:
-            conn.execute(text("DELETE FROM stock_prices"))
-        result_df.to_sql("stock_prices", self.engine, if_exists="append", index=False)
-        self.counts["stock_prices"] = {"loaded": len(result_df), "rejected": rejected}
-        logger.info(f"Loaded {len(result_df)} stock price rows, {rejected} rejected")
+                "adjusted_close": _f(row.get("adjusted_close")),
+            })
+        rec_df = pd.DataFrame(records).drop_duplicates(subset=["company_id", "date"], keep="first")
+        rec_df.to_sql("stock_prices", self.engine, if_exists="append", index=False)
+        self.counts["stock_prices"] = {"loaded": len(rec_df), "rejected": rejected}
+        logger.info(f"Loaded {len(rec_df)} stock_prices rows, {rejected} rejected")
 
     def load_documents(self) -> None:
         path = self.data_dir / "raw" / "documents.xlsx"
         if not path.exists():
-            logger.warning("documents.xlsx not found")
             return
-
-        df = self._load_excel(path, header_row=self.RAW_HEADER_ROW)
-        logger.info(f"documents.xlsx: {len(df)} rows")
-
-        ticker_map = self._make_ticker_map()
+        df = self._load_excel(path, header_row=RAW_HEADER_ROW)
         records = []
-
         for _, row in df.iterrows():
-            ticker = normalize_ticker(row.get("company_id"))
-            cid = self._resolve_company_id(ticker)
+            cid = self._resolve(row.get("company_id"))
             if cid is None:
                 continue
-
-            yr_col = None
-            for col in df.columns:
-                if col in ("year", "yr"):
-                    yr_val = row.get(col)
-                    if pd.notna(yr_val) and yr_val != "Null":
-                        try:
-                            yr_col = int(float(yr_val))
-                        except (ValueError, TypeError):
-                            yr_col = str(yr_val).strip()
-                    break
-            if yr_col is None:
-                yr_col = row.get("year", row.get("Year"))
-
-            url = None
-            for col in df.columns:
-                if "annual" in col.lower() or "report" in col.lower():
-                    url = row.get(col)
-                    if pd.notna(url) and str(url).strip() and str(url).strip() != "Null":
-                        url = str(url).strip()
-                    else:
-                        url = None
-                    break
-
-            if url:
-                doc_name = f"{ticker}_Annual_Report_{yr_col or ''}"
-                records.append({
-                    "company_id": cid,
-                    "doc_type": "Annual_Report",
-                    "doc_name": doc_name[:255],
-                    "file_path": url[:500],
-                })
-
-        if records:
-            doc_df = pd.DataFrame(records).drop_duplicates(
-                subset=["company_id", "doc_type", "doc_name"]
-            )
-            with self.engine.begin() as conn:
-                conn.execute(text("DELETE FROM documents"))
-            doc_df.to_sql("documents", self.engine, if_exists="append", index=False)
-        logger.info(f"Loaded {len(records)} document references")
+            url = row.get("annual_report")
+            if url is None or pd.isna(url) or not str(url).strip():
+                continue
+            records.append({
+                "company_id": cid,
+                "year": normalize_year(row.get("year")),
+                "annual_report": str(url).strip()[:500],
+            })
+        rec_df = pd.DataFrame(records).drop_duplicates(subset=["company_id", "year"], keep="first")
+        rec_df.to_sql("documents", self.engine, if_exists="append", index=False)
+        self.counts["documents"] = {"loaded": len(rec_df), "rejected": 0}
+        logger.info(f"Loaded {len(rec_df)} document references")
 
     def load_analysis(self) -> None:
         path = self.data_dir / "raw" / "analysis.xlsx"
         if not path.exists():
-            logger.warning("analysis.xlsx not found")
             return
-
-        df = self._load_excel(path, header_row=self.RAW_HEADER_ROW)
-        ticker_map = self._make_ticker_map()
+        df = self._load_excel(path, header_row=RAW_HEADER_ROW)
         records = []
-
         for _, row in df.iterrows():
-            ticker = normalize_ticker(row.get("company_id"))
-            cid = self._resolve_company_id(ticker)
+            cid = self._resolve(row.get("company_id"))
             if cid is None:
                 continue
-
-            for col in [c for c in df.columns if c not in ("id", "company_id")]:
-                val = row.get(col)
-                if pd.isna(val) or not str(val).strip():
-                    continue
-                # Try to extract percentage values from strings like "10 Years: 21%"
-                num_val = None
-                desc = str(val).strip()
-                match = re.search(r"(\d+\.?\d*)\s*%", desc)
-                if match:
-                    num_val = float(match.group(1))
-                records.append({
-                    "company_id": cid,
-                    "year": None,
-                    "analysis_type": "PRE_COMPUTED",
-                    "metric_name": col,
-                    "metric_value": num_val,
-                    "description": desc,
-                })
-
-        if records:
-            analysis_df = pd.DataFrame(records)
-            with self.engine.begin() as conn:
-                conn.execute(text("DELETE FROM analysis"))
-            analysis_df.to_sql("analysis", self.engine, if_exists="append", index=False)
+            records.append({
+                "company_id": cid,
+                "compounded_sales_growth": str(row.get("compounded_sales_growth", "") or "") or None,
+                "compounded_profit_growth": str(row.get("compounded_profit_growth", "") or "") or None,
+                "stock_price_cagr": str(row.get("stock_price_cagr", "") or "") or None,
+                "roe": str(row.get("roe", "") or "") or None,
+            })
+        self._load_many("analysis", records)
+        self.counts["analysis"] = {"loaded": len(records), "rejected": 0}
         logger.info(f"Loaded {len(records)} analysis records")
 
     def load_prosandcons(self) -> None:
         path = self.data_dir / "raw" / "prosandcons.xlsx"
         if not path.exists():
             return
-
-        df = self._load_excel(path, header_row=self.RAW_HEADER_ROW)
-        ticker_map = self._make_ticker_map()
+        df = self._load_excel(path, header_row=RAW_HEADER_ROW)
         records = []
-
         for _, row in df.iterrows():
-            ticker = normalize_ticker(row.get("company_id"))
-            cid = self._resolve_company_id(ticker)
+            cid = self._resolve(row.get("company_id"))
             if cid is None:
                 continue
             records.append({
                 "company_id": cid,
-                "ticker": ticker,
-                "pros": str(row.get("pros", "")) if pd.notna(row.get("pros")) else "",
-                "cons": str(row.get("cons", "")) if pd.notna(row.get("cons")) else "",
+                "pros": str(row.get("pros", "") or "") or None,
+                "cons": str(row.get("cons", "") or "") or None,
             })
-
-        if records:
-            proscons_df = pd.DataFrame(records)
-            with self.engine.begin() as conn:
-                conn.execute(text("DELETE FROM prosandcons"))
-            proscons_df.to_sql("prosandcons", self.engine, if_exists="append", index=False)
+        self._load_many("prosandcons", records)
+        self.counts["prosandcons"] = {"loaded": len(records), "rejected": 0}
         logger.info(f"Loaded {len(records)} pros/cons records")
+
+    def load_financial_ratios(self) -> None:
+        path = self.data_dir / "supporting" / "financial_ratios.xlsx"
+        if not path.exists():
+            return
+        df = self._load_excel(path, header_row=SUPP_HEADER_ROW)
+        cols = ["net_profit_margin_pct", "operating_profit_margin_pct", "return_on_equity_pct",
+                "debt_to_equity", "interest_coverage", "asset_turnover", "free_cash_flow_cr",
+                "capex_cr", "earnings_per_share", "book_value_per_share",
+                "dividend_payout_ratio_pct", "total_debt_cr", "cash_from_operations_cr"]
+        records, rejected = [], 0
+        for _, row in df.iterrows():
+            cid = self._resolve(row.get("company_id"))
+            year = normalize_year(row.get("year"))
+            if cid is None or year is None:
+                rejected += 1
+                continue
+            rec = {"company_id": cid, "year": year}
+            for c in cols:
+                rec[c] = _f(row.get(c))
+            records.append(rec)
+        rec_df = pd.DataFrame(records).drop_duplicates(subset=["company_id", "year"], keep="first")
+        rec_df.to_sql("financial_ratios", self.engine, if_exists="append", index=False)
+        self.counts["financial_ratios"] = {"loaded": len(rec_df), "rejected": rejected}
+        logger.info(f"Loaded {len(rec_df)} financial_ratios rows, {rejected} rejected")
 
     def load_peer_groups(self) -> None:
         path = self.data_dir / "supporting" / "peer_groups.xlsx"
         if not path.exists():
-            logger.warning("peer_groups.xlsx not found")
             return
-
-        df = self._load_excel(path, header_row=self.SUPP_HEADER_ROW)
-        ticker_map = self._make_ticker_map()
+        df = self._load_excel(path, header_row=SUPP_HEADER_ROW)
         records = []
-
         for _, row in df.iterrows():
-            ticker = normalize_ticker(row.get("company_id"))
-            cid = self._resolve_company_id(ticker)
+            cid = self._resolve(row.get("company_id"))
             if cid is None:
                 continue
             records.append({
+                "peer_group_name": str(row.get("peer_group_name", "") or "").strip(),
                 "company_id": cid,
-                "peer_group_name": str(row.get("peer_group_name", "")).strip(),
                 "is_benchmark": bool(row.get("is_benchmark", False)),
             })
-
-        if records:
-            peer_df = pd.DataFrame(records)
-            with self.engine.begin() as conn:
-                conn.execute(text("DELETE FROM peer_group_mapping"))
-            peer_df.to_sql("peer_group_mapping", self.engine, if_exists="append", index=False)
+        self._load_many("peer_groups", records)
+        self.counts["peer_groups"] = {"loaded": len(records), "rejected": 0}
         logger.info(f"Loaded {len(records)} peer group mappings")
 
-    # ── Run ───────────────────────────────────────────────────────────────
+    # ── Audit + run ──────────────────────────────────────────────────
 
     def _export_audit(self) -> None:
         os.makedirs("output", exist_ok=True)
-        path = "output/load_audit.csv"
-        with open(path, "w", newline="") as f:
+        with open("output/load_audit.csv", "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(["table", "loaded", "rejected"])
             for t, cnt in self.counts.items():
@@ -611,52 +473,42 @@ class ETLPipeline:
     def run(self) -> None:
         logger.info("=== ETL Pipeline Starting ===")
 
-        # Phase 1: Companies
         self.load_companies()
-        self.load_sectors_and_link()
+        self.load_extra_companies()
+        self.load_sectors()
         self.load_market_cap()
 
-        # Phase 2: Financial statements
         self.load_profitandloss()
         self.load_balancesheet()
         self.load_cashflow()
 
-        # Phase 3: Supporting data
         self.load_stock_prices()
         self.load_documents()
         self.load_analysis()
         self.load_prosandcons()
+        self.load_financial_ratios()
         self.load_peer_groups()
 
         self._export_audit()
-        logger.info("=== ETL Pipeline Complete ===")
 
-        # Run validation
         from src.etl.validator import DQValidator
-        logger.info("Running validators...")
         validator = DQValidator(self.engine)
         failures = validator.run_all()
         validator.export_failures(failures, "output/validation_failures.csv")
-        total = len(failures)
         critical = sum(1 for f in failures if f.get("severity") == "CRITICAL")
         warnings = sum(1 for f in failures if f.get("severity") == "WARNING")
-        logger.info(f"Validation: {total} failures ({critical} critical, {warnings} warnings)")
+        logger.info(f"Validation: {len(failures)} failures ({critical} CRITICAL, {warnings} WARNING)")
 
-        # Quick stats
-        try:
-            cc = pd.read_sql("SELECT COUNT(*) as cnt FROM companies", self.engine).iloc[0]["cnt"]
-            pl = pd.read_sql("SELECT COUNT(*) as cnt FROM profitandloss", self.engine).iloc[0]["cnt"]
-            bs = pd.read_sql("SELECT COUNT(*) as cnt FROM balancesheet", self.engine).iloc[0]["cnt"]
-            cf = pd.read_sql("SELECT COUNT(*) as cnt FROM cashflow", self.engine).iloc[0]["cnt"]
-            sp = pd.read_sql("SELECT COUNT(*) as cnt FROM stock_prices", self.engine).iloc[0]["cnt"]
-            logger.info(
-                f"DB summary: {cc} companies, {pl} P&L rows, "
-                f"{bs} BS rows, {cf} CF rows, {sp} stock prices"
-            )
-        except Exception as e:
-            logger.warning(f"Could not get summary: {e}")
+        for t in TABLES:
+            try:
+                n = pd.read_sql(f'SELECT COUNT(*) AS c FROM "{t}"', self.engine)["c"].iloc[0]
+                logger.info(f"  {t}: {n} rows")
+            except Exception:
+                pass
+        fk = pd.read_sql("PRAGMA foreign_key_check", self.engine)
+        logger.info(f"foreign_key_check: {len(fk)} violations")
+        logger.info("=== ETL Pipeline Complete ===")
 
 
 if __name__ == "__main__":
-    pipeline = ETLPipeline()
-    pipeline.run()
+    ETLPipeline().run()

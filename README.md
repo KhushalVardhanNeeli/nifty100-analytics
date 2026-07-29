@@ -28,6 +28,10 @@ Built in 3 sprints, end-to-end. No shortcuts, no half-baked modules.
 git clone https://github.com/KhushalVardhanNeeli/nifty100-analytics.git
 cd nifty100-analytics
 
+# (Recommended) Create and activate a virtual environment
+python3 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+
 # Install everything in one shot
 pip install -r requirements.txt
 ```
@@ -53,11 +57,13 @@ Here's what the loader looks for and maps automatically:
 
 | File should contain | Look for columns like | Gets loaded into |
 |---------------------|----------------------|-------------------|
-| Company info | `ticker`, `company_name`, `sector_name`, `market_cap`, `isin` | `companies` table |
-| Profit & Loss | `year`, `sales`, `net_profit`, `eps`, `operating_profit`, `interest_expense` | `profitandloss` table |
-| Balance Sheet | `year`, `total_assets`, `total_liabilities`, `shareholders_equity`, `total_debt`, `cash_and_equivalents` | `balancesheet` table |
-| Cash Flow | `year`, `operating_activities`, `investing_activities`, `financing_activities`, `capex` | `cashflow` table |
-| Stock Prices | `trade_date`, `open`, `high`, `low`, `close`, `volume` | `stock_prices` table |
+| Company info | `id` (ticker), `company_name`, `about_company`, `roe_percentage`, `roce_percentage` | `companies` table |
+| Sectors | `company_id`, `broad_sector`, `sub_sector`, `index_weight_pct` | `companies` + `sectors` tables |
+| Profit & Loss | `year`, `sales`, `expenses`, `operating_profit`, `opm_percentage`, `net_profit`, `eps`, `dividend_payout` | `profitandloss` table |
+| Balance Sheet | `year`, `equity_capital`, `reserves`, `borrowings`, `total_liabilities`, `total_assets` | `balancesheet` table |
+| Cash Flow | `year`, `operating_activity`, `investing_activity`, `financing_activity`, `net_cash_flow` | `cashflow` table |
+| Stock Prices | `date`, `open_price`, `high_price`, `low_price`, `close_price`, `volume` | `stock_prices` table |
+| Market Cap | `company_id`, `year`, `market_cap_crore`, `pe_ratio`, `pb_ratio` | `market_cap` table |
 
 Don't worry about exact column naming — the loader normalises everything to lowercase and strips whitespace, so `Net Profit`, `net_profit`, and `NET PROFIT ` all get picked up. Missing columns are simply skipped. Extra columns are ignored.
 
@@ -71,14 +77,24 @@ make load
 
 This is the big one. It does three things:
 
-1. **Creates the 10-table schema** — companies, P&L, balance sheet, cash flow, stock prices, financial ratios, peer percentiles, sectors, analysis, and documents. All tables get proper primary keys, foreign keys, and indexes.
-2. **Normalises every row** — tickers get uppercased, years get extracted from strings like `"FY2020-21"`, numbers like `"1,23,45,678"` become floats, percentages like `"15.5%"` become `0.155`, sector names get standardised (`"it"` → `"Information Technology"`).
+1. **Creates the 12-table schema** — companies, sectors, P&L, balance sheet, cash flow, stock prices, financial ratios, peer groups, market cap, analysis, documents, and pros/cons. All tables get proper primary keys, foreign keys (`PRAGMA foreign_keys = ON`), and indexes.
+2. **Normalises every row** — tickers get uppercased, years get extracted from strings like `"FY2020-21"`, `"Mar-13"`, `"Dec 2012"` (and `"TTM"` rows are skipped), numbers like `"1,23,45,678"` become floats, percentages are stored in their source units.
 3. **Runs 16 data quality checks** — duplicate primary keys, orphan foreign keys, balance sheet equations, OPM cross-checks, tax rate bounds, invalid URLs, and more. Every violation gets logged to `output/validation_failures.csv` with a severity label (CRITICAL or WARNING).
 
 When it finishes, you'll see a summary on screen and two CSV audit files in `output/`:
 
 - `load_audit.csv` — how many rows were loaded vs rejected per table
 - `validation_failures.csv` — which rules failed and where
+
+### Sprint 1 — data notes & documented deviations
+
+The source data carries a few quirks that were resolved deliberately during Sprint 1:
+
+- **101 companies** (not 92). The financial-statement files (`profitandloss`, `balancesheet`, `cashflow`) contain **9 companies that are absent from** `companies.xlsx`/`sectors.xlsx`/`market_cap.xlsx` (`AGTL`, `ULTRACEMCO`, `UNIONBANK`, `UNITDSPR`, `VBL`, `VEDL`, `WIPRO`, `ZOMATO`, `ZYDUSLIFE`). These were added to keep `foreign_key_check = 0`. They have no sector/market-cap/peer reference data (those columns are NULL).
+- **10 sectors** (not 11). The source `sectors.xlsx` defines 10 `broad_sector` values.
+- **12 tables** (not 10). `peer_groups` and `market_cap` are required downstream, so the schema covers all 12 source files.
+- **TTM rows excluded.** `profitandloss.xlsx` has 100 "TTM" (trailing-twelve-month) rows with no fiscal year; these are logged as rejected in `load_audit.csv`.
+- **OPM cross-check is WARNING-only.** The source `opm_percentage` field is frequently inconsistent with `operating_profit / sales` (a known source-data discrepancy). DQ-05 reports these as WARNINGs rather than blocking CRITICAL failures.
 
 ### Step 5: Compute the ratios
 
@@ -139,12 +155,12 @@ The boring-but-critical stuff. Raw data comes in messy — tickers with whitespa
 
 | Component | What it does |
 |-----------|-------------|
-| **10-table SQLite schema** | Companies, P&L, Balance Sheet, Cash Flow, Stock Prices, Financial Ratios, Peer Percentiles, Sectors, Analysis, Documents — all with foreign keys and composite unique constraints |
-| **Normaliser** | Handles tickers, years (extracts from strings), numeric values (commas, percentages, dashes), and sector name standardisation (18 sector mappings) |
-| **Validator** | 16 data quality rules — from basic stuff like duplicate keys to balance-sheet equation checks (Assets = Liabilities + Equity within 1%) and OPM cross-verification |
-| **Loader** | Auto-detects file types by column names, maps them to tables, normalises and loads in dependency order. Exports `load_audit.csv` and `validation_failures.csv` |
+| **12-table SQLite schema** | Companies, Sectors, P&L, Balance Sheet, Cash Flow, Stock Prices, Financial Ratios, Peer Groups, Market Cap, Analysis, Documents, Pros/Cons — all with foreign keys and composite unique constraints |
+| **Normaliser** | Handles tickers, years (extracts from `"Dec 2012"`, `"Mar-13"`, `"FY2020"`, skips `"TTM"`), numeric values (commas, percentages, dashes), and sector name standardisation |
+| **Validator** | 16 data quality rules — PK/FK are CRITICAL, everything else is WARNING. Includes balance-sheet equation checks (Assets = Liabilities within 1%) and OPM cross-verification |
+| **Loader** | Maps source files to tables, normalises and loads in dependency order. Exports `load_audit.csv` and `validation_failures.csv` |
 
-**16 DQ Rules:** PK uniqueness · Composite PK · FK integrity · BS balance (<1%) · OPM cross-check · Positive sales · Negative cash · Tax rate bounds · Dividend cap · Valid URLs · EPS/profit sign match · CA/CL ratio · Table coverage · Year range · Duplicate tickers · Positive market cap
+**16 DQ Rules (PK/FK = CRITICAL, rest = WARNING):** PK uniqueness · Composite PK · FK integrity · BS balance (<1%) · OPM cross-check · Positive sales · Net cash · Tax rate bounds · Dividend cap · Valid URLs · EPS/profit sign match · BS equity reconciliation · Table coverage · Year range · Duplicate tickers · Positive market cap
 
 ### Sprint 2 — Financial Ratio Engine
 
@@ -204,11 +220,11 @@ Start with `make api` or `uvicorn src.api:app --reload`.
 make test
 ```
 
-**104 tests, 0 failures,** runs in ~2 seconds:
+**121 tests, 0 failures,** runs in ~2 seconds:
 
 | Module | Tests | What's covered |
 |--------|-------|---------------|
-| `test_normaliser.py` | 49 | Ticker (8), year (11), numeric (10), sector (3), DQ rules (16) + export |
+| `test_normaliser.py` | 66 | Ticker (15), year (21), numeric (10), sector (3), DQ rules (16) + export |
 | `test_ratios.py` | 40 | NPM, OPM, ROE, ROCE, ROA, D/E, ICR, CAGR (6 edge cases), RatioEngine, CashFlow (11) |
 | `test_screener_dq.py` | 15 | Validator integration (6), peer metrics (3), screener config (6) |
 
@@ -224,7 +240,7 @@ nifty100-analytics/
 │   └── screener_config.yaml        # 6 presets with filters and weights
 ├── data/                            # Drop your CSV/Excel files here
 ├── db/
-│   └── schema.sql                  # 10 tables, all constraints + indexes
+│   └── schema.sql                  # 12 tables, all constraints + indexes
 ├── notebooks/
 │   └── exploratory_queries.sql     # 10 ready-to-run SQL queries
 ├── output/                          # Generated reports land here
@@ -251,7 +267,7 @@ nifty100-analytics/
 │   │   └── engine.py             # Composite scoring + Excel export
 │   └── api.py                     # FastAPI with 5 endpoints
 ├── tests/
-│   ├── etl/test_normaliser.py     # 49 tests
+│   ├── etl/test_normaliser.py     # 66 tests
 │   └── kpi/
 │       ├── test_ratios.py         # 40 tests
 │       └── test_screener_dq.py    # 15 tests
@@ -288,7 +304,7 @@ nifty100-analytics/
 | `make export` | Export capital allocation + edge-case log |
 | `make radar` | Generate radar chart PNGs |
 | `make report` | Run screener → Excel workbook |
-| `make test` | Run all 104 tests |
+| `make test` | Run all 121 tests |
 | `make api` | Start FastAPI with hot reload |
 | `make dashboard` | Start API via `python -m src.api` |
 | `make clean` | Wipe database, outputs, and caches |

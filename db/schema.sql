@@ -111,8 +111,7 @@ CREATE TABLE IF NOT EXISTS documents (
     doc_name TEXT,
     file_path TEXT,
     uploaded_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (company_id) REFERENCES companies(company_id),
-    UNIQUE(company_id, doc_type, doc_name)
+    FOREIGN KEY (company_id) REFERENCES companies(company_id)
 );
 
 CREATE TABLE IF NOT EXISTS financial_ratios (
@@ -193,3 +192,37 @@ CREATE INDEX IF NOT EXISTS idx_peer_percentiles_company_id ON peer_percentiles(c
 CREATE INDEX IF NOT EXISTS idx_peer_percentiles_year ON peer_percentiles(year);
 CREATE INDEX IF NOT EXISTS idx_peer_percentiles_metric_name ON peer_percentiles(metric_name);
 CREATE INDEX IF NOT EXISTS idx_peer_percentiles_peer_group ON peer_percentiles(peer_group);
+
+CREATE TABLE IF NOT EXISTS market_cap_annual (
+    mca_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL,
+    year INTEGER NOT NULL,
+    market_cap_crore REAL,
+    enterprise_value_crore REAL,
+    pe_ratio REAL,
+    pb_ratio REAL,
+    ev_ebitda REAL,
+    dividend_yield_pct REAL,
+    FOREIGN KEY (company_id) REFERENCES companies(company_id),
+    UNIQUE(company_id, year)
+);
+
+CREATE TABLE IF NOT EXISTS prosandcons (
+    pc_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL,
+    ticker TEXT,
+    pros TEXT,
+    cons TEXT,
+    FOREIGN KEY (company_id) REFERENCES companies(company_id)
+);
+
+CREATE TABLE IF NOT EXISTS peer_group_mapping (
+    pgm_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL,
+    peer_group_name TEXT NOT NULL,
+    is_benchmark BOOLEAN DEFAULT 0,
+    FOREIGN KEY (company_id) REFERENCES companies(company_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_mca_company_year ON market_cap_annual(company_id, year);
+CREATE INDEX IF NOT EXISTS idx_pgm_peer_group ON peer_group_mapping(peer_group_name);

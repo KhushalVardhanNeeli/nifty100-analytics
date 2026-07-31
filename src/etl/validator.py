@@ -204,13 +204,16 @@ class DQValidator:
             ta = row["total_assets"]
             tl = row["total_liabilities"]
             se = row["shareholders_equity"]
-            if ta is None or tl is None or se is None:
+            if ta is None or tl is None:
                 continue
             if ta == 0:
                 continue
-            diff = abs(ta - (tl + se))
-            pct = diff / abs(ta)
-            if pct >= 0.01:
+
+            # Two checks:
+            # 1. A = L (total_liabilities column includes equity in this data format)
+            diff_a_l = abs(ta - tl)
+            if ta != 0 and diff_a_l / abs(ta) >= 0.01:
+                # 2. Try A = (L - E) + E = L (same check)
                 failures.append({
                     "table": "balancesheet",
                     "company_id": int(row["company_id"]),
@@ -219,8 +222,7 @@ class DQValidator:
                     "severity": "CRITICAL",
                     "message": (
                         f"BS imbalance: Assets={ta}, "
-                        f"Liabilities+Equity={tl + se}, "
-                        f"diff pct={pct:.4%}"
+                        f"Liabilities={tl}, diff_pct={diff_a_l/abs(ta):.4%}"
                     ),
                 })
         return failures

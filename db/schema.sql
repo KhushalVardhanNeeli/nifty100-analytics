@@ -128,24 +128,55 @@ CREATE TABLE IF NOT EXISTS stock_prices (
     UNIQUE (company_id, date)
 );
 
--- ── financial_ratios.xlsx (pre-computed source ratios) ──────────
+-- ── financial_ratios (computed by the Sprint 2 ratio engine) ─────
 CREATE TABLE IF NOT EXISTS financial_ratios (
-    fr_id                       INTEGER PRIMARY KEY AUTOINCREMENT,
-    company_id                  INTEGER NOT NULL,
-    year                        INTEGER NOT NULL,
-    net_profit_margin_pct       REAL,
-    operating_profit_margin_pct REAL,
-    return_on_equity_pct        REAL,
-    debt_to_equity              REAL,
-    interest_coverage           REAL,
-    asset_turnover              REAL,
-    free_cash_flow_cr           REAL,
-    capex_cr                    REAL,
-    earnings_per_share          REAL,
-    book_value_per_share        REAL,
-    dividend_payout_ratio_pct   REAL,
-    total_debt_cr               REAL,
-    cash_from_operations_cr     REAL,
+    fr_id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id                     INTEGER NOT NULL,
+    year                           INTEGER NOT NULL,
+    -- profitability
+    net_profit_margin_pct          REAL,
+    operating_profit_margin_pct    REAL,
+    return_on_equity_pct           REAL,
+    return_on_capital_employed_pct REAL,
+    return_on_assets_pct           REAL,
+    -- leverage
+    debt_to_equity                 REAL,
+    interest_coverage              REAL,
+    icr_label                      TEXT,
+    high_leverage_flag             BOOLEAN,
+    icr_warning_flag               BOOLEAN,
+    net_debt_cr                    REAL,
+    -- efficiency
+    asset_turnover                 REAL,
+    -- cash flow
+    free_cash_flow_cr              REAL,
+    capex_cr                       REAL,
+    fcf_conversion_pct             REAL,
+    capex_intensity_pct            REAL,
+    cfo_quality_score              REAL,
+    cfo_quality_label              TEXT,
+    capital_allocation_pattern     TEXT,
+    -- per-share / payout (from P&L)
+    earnings_per_share             REAL,
+    book_value_per_share           REAL,
+    dividend_payout_ratio_pct      REAL,
+    total_debt_cr                  REAL,
+    cash_from_operations_cr        REAL,
+    -- growth (CAGR windows)
+    revenue_cagr_3yr               REAL,
+    revenue_cagr_5yr               REAL,
+    revenue_cagr_10yr              REAL,
+    pat_cagr_3yr                   REAL,
+    pat_cagr_5yr                   REAL,
+    pat_cagr_10yr                  REAL,
+    eps_cagr_3yr                   REAL,
+    eps_cagr_5yr                   REAL,
+    eps_cagr_10yr                  REAL,
+    revenue_cagr_5yr_flag          TEXT,
+    pat_cagr_5yr_flag              TEXT,
+    eps_cagr_5yr_flag              TEXT,
+    -- composite (computed in Sprint 3)
+    composite_quality_score        REAL,
     FOREIGN KEY (company_id) REFERENCES companies(company_id),
     UNIQUE (company_id, year)
 );

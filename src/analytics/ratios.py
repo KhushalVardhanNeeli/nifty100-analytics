@@ -1,6 +1,18 @@
-"""Financial Ratio Engine — Sprint 2. Computes 20+ KPIs for all companies across all years.
+"""Financial Ratio Engine — Sprint 2.
 
-Works with the actual DB schema loaded by the ETL pipeline.
+Computes profitability, leverage, efficiency, cash-flow and growth (CAGR)
+KPIs for every company-year and populates the `financial_ratios` table.
+
+Formula conventions (per spec):
+  * NPM  = net_profit / sales * 100               (None if sales = 0)
+  * OPM  = operating_profit / sales * 100         (None if sales = 0)
+  * ROE  = net_profit / (equity + reserves) * 100 (None if <= 0)
+  * ROCE = EBIT / (equity + reserves + borrowings) * 100
+  * ROA  = net_profit / total_assets * 100        (None if assets = 0)
+  * D/E  = borrowings / (equity + reserves)       (0 if borrowings = 0)
+  * ICR  = (operating_profit + other_income) / interest (None if interest = 0)
+  * Net Debt = borrowings - investments
+  * Asset Turnover = sales / total_assets
 """
 
 import logging
@@ -15,57 +27,59 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("ratios")
 
 DB_PATH = os.getenv("DB_PATH", "db/nifty100.db")
+OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output")
 
 
-def nvl(val, default: float = 0.0) -> float:
-    """Return default if val is None or NaN."""
-    if val is None:
-        return default
+def _num(v) -> Optional[float]:
+    if v is None:
+        return None
     try:
-        if np.isnan(float(val)):
-            return default
+        if pd.isna(v):
+            return None
     except (ValueError, TypeError):
-        return default
-    return float(val)
-
-
-# ── Standalone ratio functions (for unit tests & backward compatibility) ──
-
-def net_profit_margin(net_profit: float, sales: float) -> Optional[float]:
-    if not sales or sales == 0:
+        pass
+    try:
+        return float(v)
+    except (ValueError, TypeError):
         return None
-    return (net_profit / sales) * 100
 
 
-def operating_profit_margin(operating_profit: float, sales: float) -> Optional[float]:
-    if not sales or sales == 0:
+# ── Standalone ratio functions (unit-testable) ────────────────────────
+
+def net_profit_margin(net_profit, sales):
+    if not sales or sales == 0 or net_profit is None:
         return None
-    return (operating_profit / sales) * 100
+    return net_profit / sales * 100
 
 
-def return_on_equity(net_profit: float, equity_capital: float, reserves: float = 0.0) -> Optional[float]:
-    equity = equity_capital + (reserves or 0)
-    if equity <= 0:
+def operating_profit_margin(operating_profit, sales):
+    if not sales or sales == 0 or operating_profit is None:
         return None
-    return (net_profit / equity) * 100
+    return operating_profit / sales * 100
 
 
-def return_on_capital_employed(ebit: float, equity_capital: float, reserves: float, borrowings: float) -> Optional[float]:
-    """ROCE — return on capital employed. Backward-compatible signature."""
-    capital = equity_capital + reserves + borrowings
-    if capital <= 0:
+def return_on_equity(net_profit, equity_capital, reserves=0.0):
+    equity = (equity_capital or 0) + (reserves or 0)
+    if equity <= 0 or net_profit is None:
         return None
-    return (ebit / capital) * 100
+    return net_profit / equity * 100
 
 
-def return_on_assets(net_profit: float, total_assets: float) -> Optional[float]:
-    if not total_assets or total_assets == 0:
+def return_on_capital_employed(ebit, equity_capital, reserves, borrowings):
+    capital = (equity_capital or 0) + (reserves or 0) + (borrowings or 0)
+    if capital <= 0 or ebit is None:
         return None
-    return (net_profit / total_assets) * 100
+    return ebit / capital * 100
 
 
-def debt_to_equity(borrowings: float, equity_capital: float, reserves: float = 0.0) -> Optional[float]:
-    equity = equity_capital + (reserves or 0)
+def return_on_assets(net_profit, total_assets):
+    if not total_assets or total_assets == 0 or net_profit is None:
+        return None
+    return net_profit / total_assets * 100
+
+
+def debt_to_equity(borrowings, equity_capital, reserves=0.0):
+    equity = (equity_capital or 0) + (reserves or 0)
     if equity <= 0:
         return None
     if not borrowings or borrowings == 0:
@@ -73,74 +87,61 @@ def debt_to_equity(borrowings: float, equity_capital: float, reserves: float = 0
     return borrowings / equity
 
 
-def interest_coverage_ratio(op_profit: float, other_income_or_interest: float, interest: float = None) -> Optional[float]:
-    # Support both: (op_profit, other_income, interest) and (op_profit, interest)
-    if interest is not None:
-        # 3-arg call: (op_profit, other_income, interest)
-        if interest == 0:
-            return None  # Debt-free
-        ebit = (op_profit or 0) + (other_income_or_interest or 0)
-        return ebit / interest
-    else:
-        # 2-arg call: (op_profit, interest) where other_income_or_interest is interest
-        if not other_income_or_interest or other_income_or_interest == 0:
-            return None  # Debt-free
-        return op_profit / other_income_or_interest
+def interest_coverage_ratio(operating_profit, other_income, interest):
+    if not interest or interest == 0:
+        return None
+    ebit = (operating_profit or 0) + (other_income or 0)
+    return ebit / interest
 
 
-def compute_cagr(start_value: float, end_value: float, n: int):
-    """Standalone CAGR. Returns (value, flag)."""
-    if n <= 0:
-        return None, None
-    if start_value == 0:
-        return None, "ZERO_BASE"
-    if start_value > 0 and end_value > 0:
-        cagr = ((end_value / start_value) ** (1 / n) - 1) * 100
-        return round(cagr, 2), None
-    elif start_value > 0 and end_value < 0:
-        return None, "DECLINE_TO_LOSS"
-    elif start_value < 0 and end_value > 0:
-        return None, "TURNAROUND"
-    else:
-        return None, "BOTH_NEGATIVE"
+def net_debt(borrowings, investments):
+    return (borrowings or 0) - (investments or 0)
 
 
-# ── RatioEngine class ────────────────────────────────────────────────────
+def asset_turnover(sales, total_assets):
+    if not sales or not total_assets or total_assets == 0:
+        return None
+    return sales / total_assets
+
+
+def book_value_per_share(equity_capital, reserves, face_value):
+    if not equity_capital or equity_capital == 0 or not face_value:
+        return None
+    return (equity_capital + (reserves or 0)) * face_value / equity_capital
+
+
+def opm_cross_check(operating_profit_margin_pct, opm_percentage):
+    """Cross-check computed OPM against the source opm_percentage field.
+
+    Returns True when the two diverge by more than 1 percentage point.
+    """
+    if operating_profit_margin_pct is None or opm_percentage is None:
+        return False
+    source = opm_percentage / 100.0 if abs(opm_percentage) > 1 else opm_percentage
+    return abs(operating_profit_margin_pct / 100.0 - source) >= 0.01
+
+
+# ── RatioEngine ───────────────────────────────────────────────────────
 
 class RatioEngine:
-    """Computes all financial ratios from P&L, BS, CF, and stores results."""
+    """Computes all ratios and populates the financial_ratios table."""
 
     def __init__(self, db_path: str = "db/nifty100.db"):
         self.db_path = db_path
         self.engine = create_engine(f"sqlite:///{db_path}")
-        self.financial_warnings: list[str] = []
-        self.icr_warnings: list[str] = []
-        self._companies: pd.DataFrame = pd.DataFrame()
 
-    def _is_financial(self, sector_name: Optional[str]) -> bool:
-        if not sector_name:
-            return False
-        s = str(sector_name).lower()
-        return any(kw in s for kw in ["financial", "bfsi", "bank"])
-
-    def compute_ratios(self, company_id=None):
-        """Backward-compatible wrapper for per-company computation."""
-        return self.compute_all(company_id)
+    def _is_financial(self, sector) -> bool:
+        return bool(sector) and "financial" in str(sector).lower()
 
     def compute_all(self, company_id=None) -> pd.DataFrame:
-        """Compute ratios for all company-year combinations."""
-
+        """Compute base profitability/leverage/efficiency ratios per company-year."""
         query = """
             SELECT p.company_id, p.year,
-                p.sales, p.operating_profit, p.operating_profit_margin,
-                p.net_profit, p.eps, p.dividend_payout_pct, p.tax_rate,
-                p.depreciation, p.interest_expense, p.other_income,
-                p.total_revenue, p.cogs,
-                b.total_assets, b.total_liabilities, b.shareholders_equity,
-                b.total_debt, b.current_assets, b.current_liabilities,
-                b.cash_and_equivalents, b.inventory, b.investments,
-                b.fixed_assets,
-                c.sector_name, c.market_cap, c.ticker
+                   p.sales, p.operating_profit, p.other_income, p.interest,
+                   p.net_profit, p.eps, p.dividend_payout, p.depreciation,
+                   b.equity_capital, b.reserves, b.borrowings, b.investments,
+                   b.total_assets, b.total_liabilities,
+                   c.broad_sector, c.face_value, c.ticker
             FROM profitandloss p
             LEFT JOIN balancesheet b ON p.company_id = b.company_id AND p.year = b.year
             LEFT JOIN companies c ON p.company_id = c.company_id
@@ -150,327 +151,156 @@ class RatioEngine:
             query += " WHERE p.company_id = :cid"
             params["cid"] = int(company_id)
 
-        df = pd.read_sql_query(text(query), self.engine, params=params if params else None)
+        df = pd.read_sql_query(text(query), self.engine, params=params or None)
         if df.empty:
-            logger.warning("No data found for ratio computation")
             return pd.DataFrame()
 
-        ratios_list = []
-        for _, row in df.iterrows():
-            cid = int(row["company_id"])
-            yr = int(row["year"])
-            sector = row.get("sector_name")
+        rows = []
+        for _, r in df.iterrows():
+            cid = int(r["company_id"])
+            yr = int(r["year"])
+            sector = r["broad_sector"]
             is_fin = self._is_financial(sector)
 
-            sales = nvl(row.get("sales"))
-            net_profit = row.get("net_profit")
-            op_profit = nvl(row.get("operating_profit"))
-            total_assets = nvl(row.get("total_assets"))
-            equity = nvl(row.get("shareholders_equity"))
-            total_debt = nvl(row.get("total_debt"))
-            cash = nvl(row.get("cash_and_equivalents"))
-            cur_assets = nvl(row.get("current_assets"))
-            cur_liab = nvl(row.get("current_liabilities"))
-            inventory = nvl(row.get("inventory"))
-            depreciation = nvl(row.get("depreciation"))
-            interest_expense = nvl(row.get("interest_expense"))
-            tax_rate = row.get("tax_rate")  # already decimal
-            cogs = nvl(row.get("cogs"))
-            eps = row.get("eps")
-            div_payout = row.get("dividend_payout_pct")  # already decimal
-            mcap = row.get("market_cap")
-            investments = nvl(row.get("investments"))
-            other_income = nvl(row.get("other_income"))
+            sales = _num(r["sales"])
+            op = _num(r["operating_profit"])
+            oi = _num(r["other_income"])
+            interest = _num(r["interest"])
+            np_ = _num(r["net_profit"])
+            equity_cap = _num(r["equity_capital"])
+            reserves = _num(r["reserves"])
+            borrowings = _num(r["borrowings"])
+            investments = _num(r["investments"])
+            total_assets = _num(r["total_assets"])
+            face_value = _num(r["face_value"])
 
-            entry: dict = {"company_id": cid, "year": yr}
+            ebit = (op or 0) + (oi or 0)
+            roe = return_on_equity(np_, equity_cap, reserves)
+            de = debt_to_equity(borrowings, equity_cap, reserves)
+            icr = interest_coverage_ratio(op, oi, interest)
 
-            # Profitability
-            entry["net_profit_margin"] = (
-                (net_profit / sales * 100)
-                if sales and sales != 0 and net_profit is not None
-                else None
-            )
-            entry["operating_profit_margin"] = (
-                (op_profit / sales * 100)
-                if sales and sales != 0 and op_profit is not None
-                else None
-            )
-            gross_profit = sales - cogs if sales and cogs else None
-            entry["gross_profit_margin"] = (
-                (gross_profit / sales * 100)
-                if gross_profit is not None and sales and sales != 0
-                else None
-            )
+            # Flags
+            icr_label = None
+            if interest is not None and interest == 0 and (op or 0) > 0:
+                icr_label = "Debt Free"
+            icr_warning = (icr is not None and icr < 1.5)
+            high_leverage = (de is not None and de > 5 and not is_fin)
 
-            # ROE
-            entry["roe"] = (
-                (net_profit / equity * 100)
-                if equity > 0 and net_profit is not None
-                else None
-            )
+            rows.append({
+                "company_id": cid, "year": yr,
+                "net_profit_margin_pct": net_profit_margin(np_, sales),
+                "operating_profit_margin_pct": operating_profit_margin(op, sales),
+                "return_on_equity_pct": roe,
+                "return_on_capital_employed_pct": return_on_capital_employed(ebit, equity_cap, reserves, borrowings),
+                "return_on_assets_pct": return_on_assets(np_, total_assets),
+                "debt_to_equity": de,
+                "interest_coverage": icr,
+                "icr_label": icr_label,
+                "high_leverage_flag": bool(high_leverage),
+                "icr_warning_flag": bool(icr_warning),
+                "net_debt_cr": net_debt(borrowings, investments),
+                "asset_turnover": asset_turnover(sales, total_assets),
+                "earnings_per_share": _num(r["eps"]),
+                "book_value_per_share": book_value_per_share(equity_cap, reserves, face_value),
+                "dividend_payout_ratio_pct": _num(r["dividend_payout"]),
+                "total_debt_cr": borrowings,
+            })
+        return pd.DataFrame(rows)
 
-            # ROCE = operating_profit / (total_assets - current_liabilities)
-            denom_roce = total_assets - cur_liab if total_assets else 0
-            entry["roce"] = (
-                (op_profit / denom_roce * 100)
-                if denom_roce > 0 and op_profit is not None
-                else None
-            )
+    def _merge_cashflow(self, base: pd.DataFrame) -> pd.DataFrame:
+        from src.analytics.cashflow_kpis import CashFlowAnalyzer
+        cf = CashFlowAnalyzer(self.db_path).compute()
+        if not base.empty:
+            cfo = pd.read_sql_query(
+                text("SELECT company_id, year, operating_activity FROM cashflow"), self.engine)
+            base = base.merge(cfo.rename(columns={"operating_activity": "cash_from_operations_cr"}),
+                              on=["company_id", "year"], how="left")
+        if cf.empty or base.empty:
+            return base
+        base = base.merge(
+            cf[["company_id", "year", "free_cash_flow_cr", "cfo_quality_score",
+                "cfo_quality_label", "capex_intensity_pct", "capex_intensity_label",
+                "fcf_conversion_pct", "capital_allocation_pattern"]],
+            on=["company_id", "year"], how="left")
+        return base
 
-            # ROA
-            entry["roa"] = (
-                (net_profit / total_assets * 100)
-                if total_assets > 0 and net_profit is not None
-                else None
-            )
+    def _merge_cagr(self, df: pd.DataFrame) -> pd.DataFrame:
+        from src.analytics.cagr import CAGRCalculator
+        calc = CAGRCalculator(self.db_path)
+        cagr_df = calc.compute_all()
+        if cagr_df.empty or df.empty:
+            return df
 
-            # ROIC = operating_profit * (1 - tax_rate) / (total_debt + equity)
-            invested_capital = total_debt + equity
-            if invested_capital > 0 and op_profit is not None:
-                tr = nvl(tax_rate, 0.25)
-                entry["roic"] = (op_profit * (1 - tr)) / invested_capital * 100
-            else:
-                entry["roic"] = None
+        latest = df.groupby("company_id")["year"].transform("max") == df["year"]
+        for metric in ["revenue", "pat", "eps"]:
+            for w in [3, 5, 10]:
+                col = f"{metric}_cagr_{w}yr"
+                sub = cagr_df[(cagr_df["metric"] == metric) & (cagr_df["window"] == w)]
+                m = sub.set_index("company_id")[["value", "flag"]].rename(
+                    columns={"value": col, "flag": col + "_flag"})
+                df = df.merge(m, left_on="company_id", right_index=True, how="left")
+                df.loc[~latest, col] = None
+                df.loc[~latest, col + "_flag"] = None
+        return df
 
-            # Debt-to-Equity
-            if equity <= 0:
-                entry["debt_to_equity"] = None
-            elif total_debt == 0:
-                entry["debt_to_equity"] = 0.0
-            else:
-                entry["debt_to_equity"] = total_debt / equity
-
-            if is_fin and entry["debt_to_equity"] is not None and entry["debt_to_equity"] > 5:
-                self.financial_warnings.append(
-                    f"{cid}:{yr} | Financial sector D/E={entry['debt_to_equity']:.2f} > 5"
-                )
-
-            # Interest Coverage = (operating_profit + other_income) / interest
-            ebit = op_profit + other_income
-            if interest_expense == 0:
-                entry["interest_coverage"] = None
-                if op_profit > 0:
-                    self.icr_warnings.append(f"{cid}:{yr} | Debt Free (interest_expense=0)")
-            else:
-                entry["interest_coverage"] = ebit / interest_expense
-                if entry["interest_coverage"] < 1.5:
-                    self.icr_warnings.append(
-                        f"{cid}:{yr} | ICR={entry['interest_coverage']:.2f} < 1.5"
-                    )
-
-            # Net Debt
-            entry["net_debt"] = total_debt - cash - investments
-
-            # Net Debt to EBITDA
-            ebitda = op_profit + depreciation
-            entry["net_debt_to_ebitda"] = (
-                entry["net_debt"] / ebitda if ebitda > 0 else None
-            )
-
-            # Asset Turnover
-            entry["asset_turnover"] = (
-                sales / total_assets if sales and total_assets > 0 else None
-            )
-
-            # Current Ratio
-            entry["current_ratio"] = (
-                cur_assets / cur_liab
-                if cur_assets and cur_liab and cur_liab != 0
-                else None
-            )
-
-            # Quick Ratio
-            entry["quick_ratio"] = (
-                (cur_assets - inventory) / cur_liab
-                if cur_assets and inventory is not None and cur_liab and cur_liab != 0
-                else None
-            )
-
-            # Inventory Turnover
-            entry["inventory_turnover"] = None  # Need inventory data not available
-
-            # Dividend Yield — from market_cap_annual or companies
-            entry["dividend_yield"] = None
-            if div_payout is not None and eps is not None and eps != 0:
-                dps = div_payout * eps  # div_payout is decimal fraction
-                # Try getting close price from stock_prices
-                try:
-                    sp_df = pd.read_sql_query(
-                        text(
-                            "SELECT close FROM stock_prices "
-                            "WHERE company_id = :cid "
-                            "AND CAST(substr(trade_date, 1, 4) AS INTEGER) = :yr "
-                            "ORDER BY trade_date DESC LIMIT 1"
-                        ),
-                        self.engine,
-                        params={"cid": cid, "yr": yr},
-                    )
-                    if not sp_df.empty:
-                        cp = sp_df.iloc[0]["close"]
-                        if cp and cp != 0:
-                            entry["dividend_yield"] = dps / cp * 100
-                except Exception:
-                    pass
-
-            # FCF Yield = FCF / Market Cap
-            entry["fcf_yield"] = None
-            try:
-                cf_df = pd.read_sql_query(
-                    text(
-                        "SELECT fcf FROM cashflow WHERE company_id = :cid AND year = :yr"
-                    ),
-                    self.engine,
-                    params={"cid": cid, "yr": yr},
-                )
-                if not cf_df.empty:
-                    fcf_val = cf_df.iloc[0]["fcf"]
-                    if fcf_val and mcap and mcap != 0:
-                        entry["fcf_yield"] = fcf_val / mcap * 100
-            except Exception:
-                pass
-
-            # EV / EBITDA (Enterprise Value not reliably available)
-            entry["ev_to_ebitda"] = None
-
-            # P/E Ratio
-            entry["pe_ratio"] = None
-            if eps and eps != 0:
-                try:
-                    sp_df = pd.read_sql_query(
-                        text(
-                            "SELECT close FROM stock_prices "
-                            "WHERE company_id = :cid "
-                            "AND CAST(substr(trade_date, 1, 4) AS INTEGER) = :yr "
-                            "ORDER BY trade_date DESC LIMIT 1"
-                        ),
-                        self.engine,
-                        params={"cid": cid, "yr": yr},
-                    )
-                    if not sp_df.empty:
-                        cp = sp_df.iloc[0]["close"]
-                        if cp and cp != 0:
-                            entry["pe_ratio"] = cp / eps
-                except Exception:
-                    pass
-
-            # P/B Ratio
-            entry["pb_ratio"] = (
-                mcap / equity
-                if mcap and equity > 0
-                else None
-            )
-
-            # CFO Quality — from cashflow_analyzer
-            entry["cfo_quality"] = None
-            entry["capex_intensity"] = None
-            entry["allocation_pattern"] = None
-
-            ratios_list.append(entry)
-
-        result_df = pd.DataFrame(ratios_list)
-        logger.info(f"Computed {len(result_df)} ratio rows across {result_df['company_id'].nunique()} companies")
-        return result_df
-
-    def store(self, df: pd.DataFrame) -> None:
-        """Store computed ratios in financial_ratios table."""
-        if df.empty:
-            return
-
-        # Build list of expected column names matching schema
-        ratio_cols = [
-            "company_id", "year",
-            "net_profit_margin", "operating_profit_margin", "gross_profit_margin",
-            "roe", "roce", "roa", "roic",
-            "debt_to_equity", "interest_coverage", "net_debt", "net_debt_to_ebitda",
-            "asset_turnover", "current_ratio", "quick_ratio",
-            "inventory_turnover", "dividend_yield", "fcf_yield",
-            "ev_to_ebitda", "pe_ratio", "pb_ratio",
-            "cfo_quality", "capex_intensity", "allocation_pattern",
-        ]
-
-        # Ensure we have all expected columns
-        store_df = df.copy()
-        for col in ratio_cols:
-            if col not in store_df.columns:
-                store_df[col] = None
-
-        # Select only cols matching schema
-        avail = [c for c in ratio_cols if c in store_df.columns]
-        store_df = store_df[avail]
-
-        with self.engine.begin() as conn:
-            # Delete all existing ratio data for re-computation
-            conn.execute(text("DELETE FROM financial_ratios"))
-
-        store_df.to_sql(
-            "financial_ratios",
-            self.engine,
-            if_exists="append",
-            index=False,
-        )
-        logger.info(f"Stored {len(store_df)} rows in financial_ratios")
+    def compute_ratios(self, company_id=None):
+        """Backward-compatible wrapper."""
+        df = self.compute_all(company_id)
+        df = self._merge_cashflow(df)
+        return df
 
     def run(self) -> dict:
-        """Main entry point: compute all ratios and store them."""
         logger.info("Computing financial ratios...")
-        df = self.compute_all()
-        if not df.empty:
-            self.store(df)
+        base = self.compute_all()
+        base = self._merge_cashflow(base)
+        base = self._merge_cagr(base)
 
-        # Also compute cash flow KPIs
-        try:
-            from src.analytics.cashflow_kpis import CashFlowAnalyzer
-            cf_analyzer = CashFlowAnalyzer(db_path=self.db_path)
-            cf_results = cf_analyzer.run()
-            if not cf_results.empty and not df.empty:
-                self._merge_cf_kpis(df, cf_results)
-        except Exception as e:
-            logger.warning(f"Cash-flow KPIs could not be computed: {e}")
+        base["composite_quality_score"] = None  # populated in Sprint 3
+        self._store(base)
 
-        total = len(df)
-        companies = df["company_id"].nunique() if not df.empty else 0
-        logger.info(
-            f"Ratio engine done: {total} rows across {companies} companies. "
-            f"Financial warnings: {len(self.financial_warnings)}, "
-            f"ICR warnings: {len(self.icr_warnings)}"
-        )
-        return {
-            "total_rows": total,
-            "companies": companies,
-            "financial_warnings": len(self.financial_warnings),
-            "icr_warnings": len(self.icr_warnings),
-        }
+        from src.analytics.exports import export_capital_allocation, export_ratio_edge_cases
+        export_capital_allocation(self.db_path)
+        export_ratio_edge_cases(self.db_path)
 
-    def _merge_cf_kpis(self, ratios_df: pd.DataFrame, cf_results: pd.DataFrame) -> None:
-        """Merge cash flow KPIs into ratios table."""
-        if cf_results.empty:
+        total = len(base)
+        companies = base["company_id"].nunique() if not base.empty else 0
+        logger.info(f"Ratio engine done: {total} rows across {companies} companies")
+        return {"total_rows": total, "companies": companies}
+
+    def _store(self, df: pd.DataFrame) -> None:
+        if df.empty:
             return
+        cols = [
+            "company_id", "year",
+            "net_profit_margin_pct", "operating_profit_margin_pct",
+            "return_on_equity_pct", "return_on_capital_employed_pct", "return_on_assets_pct",
+            "debt_to_equity", "interest_coverage", "icr_label",
+            "high_leverage_flag", "icr_warning_flag", "net_debt_cr", "asset_turnover",
+            "free_cash_flow_cr", "capex_cr", "fcf_conversion_pct", "capex_intensity_pct",
+            "cfo_quality_score", "cfo_quality_label", "capital_allocation_pattern",
+            "earnings_per_share", "book_value_per_share", "dividend_payout_ratio_pct",
+            "total_debt_cr", "cash_from_operations_cr",
+            "revenue_cagr_3yr", "revenue_cagr_5yr", "revenue_cagr_10yr",
+            "pat_cagr_3yr", "pat_cagr_5yr", "pat_cagr_10yr",
+            "eps_cagr_3yr", "eps_cagr_5yr", "eps_cagr_10yr",
+            "revenue_cagr_5yr_flag", "pat_cagr_5yr_flag", "eps_cagr_5yr_flag",
+            "composite_quality_score",
+        ]
+        store = df[[c for c in cols if c in df.columns]].copy()
+        # capex_cr = magnitude of negative investing activity (net capital expenditure)
+        cf = pd.read_sql_query(
+            text("SELECT company_id, year, investing_activity FROM cashflow"), self.engine)
+        store = store.merge(cf, on=["company_id", "year"], how="left")
+        store["capex_cr"] = store["investing_activity"].apply(
+            lambda x: abs(x) if pd.notna(x) and x < 0 else 0.0)
+        store = store.drop(columns=["investing_activity"])
 
         with self.engine.begin() as conn:
-            for _, row in cf_results.iterrows():
-                cid = int(row["company_id"])
-                yr = int(row["year"])
-                updates = {}
-                if "cfo_quality" in row and row["cfo_quality"] is not None:
-                    updates["cfo_quality"] = str(row["cfo_quality"])
-                if "capex_intensity_label" in row and row["capex_intensity_label"] is not None:
-                    updates["capex_intensity"] = str(row["capex_intensity_label"])
-                if "allocation_pattern" in row and row["allocation_pattern"] is not None:
-                    updates["allocation_pattern"] = str(row["allocation_pattern"])
-
-                if updates:
-                    set_clause = ", ".join(f"{k} = :{k}" for k in updates)
-                    params = {**updates, "cid": cid, "yr": yr}
-                    conn.execute(
-                        text(
-                            f"UPDATE financial_ratios SET {set_clause} "
-                            f"WHERE company_id = :cid AND year = :yr"
-                        ),
-                        params,
-                    )
+            conn.execute(text("DELETE FROM financial_ratios"))
+        store.to_sql("financial_ratios", self.engine, if_exists="append", index=False)
+        logger.info(f"Stored {len(store)} rows in financial_ratios")
 
 
 if __name__ == "__main__":
-    engine = RatioEngine()
-    result = engine.run()
+    result = RatioEngine().run()
     print(f"Done: {result}")

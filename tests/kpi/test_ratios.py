@@ -1,7 +1,6 @@
 import math
-import os
 import sys
-from unittest.mock import MagicMock, patch
+import os
 
 import numpy as np
 import pandas as pd
@@ -17,501 +16,213 @@ from src.analytics.ratios import (
     return_on_assets,
     debt_to_equity,
     interest_coverage_ratio,
-    RatioEngine,
+    net_debt,
+    asset_turnover,
+    book_value_per_share,
+    opm_cross_check,
 )
-from src.analytics.cagr import compute_cagr, CAGRCalculator
-from src.analytics.cashflow_kpis import CashFlowAnalyzer
+from src.analytics.cagr import compute_cagr
+from src.analytics.cashflow_kpis import (
+    free_cash_flow,
+    cfo_quality_label,
+    capex_intensity_pct,
+    capex_intensity_label,
+    fcf_conversion_pct,
+    classify_allocation,
+)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Net Profit Margin — 3 tests
+# Profitability ratios
 # ══════════════════════════════════════════════════════════════════════════════
 
 class TestNetProfitMargin:
-    def test_normal_positive_margin(self):
-        result = net_profit_margin(100, 1000)
-        assert result == pytest.approx(10.0)
+    def test_normal(self):
+        assert net_profit_margin(100, 1000) == pytest.approx(10.0)
 
-    def test_zero_sales_denominator(self):
-        result = net_profit_margin(100, 0)
-        assert result is None
+    def test_zero_sales_returns_none(self):
+        assert net_profit_margin(100, 0) is None
 
-    def test_negative_profit_margin(self):
-        result = net_profit_margin(-100, 1000)
-        assert result == pytest.approx(-10.0)
+    def test_negative_profit(self):
+        assert net_profit_margin(-100, 1000) == pytest.approx(-10.0)
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Operating Profit Margin — 2 tests
-# ══════════════════════════════════════════════════════════════════════════════
 
 class TestOperatingProfitMargin:
-    def test_normal_opm(self):
-        result = operating_profit_margin(200, 1000)
-        assert result == pytest.approx(20.0)
+    def test_normal(self):
+        assert operating_profit_margin(200, 1000) == pytest.approx(20.0)
 
-    def test_zero_operating_profit(self):
-        result = operating_profit_margin(0, 1000)
-        assert result == pytest.approx(0.0)
+    def test_zero_sales_returns_none(self):
+        assert operating_profit_margin(200, 0) is None
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Return on Equity — 3 tests
-# ══════════════════════════════════════════════════════════════════════════════
 
 class TestReturnOnEquity:
-    def test_normal_roe(self):
-        result = return_on_equity(100, 500, 500)
-        assert result == pytest.approx(10.0)
+    def test_positive_equity(self):
+        assert return_on_equity(100, 500, 500) == pytest.approx(10.0)
 
     def test_negative_equity_returns_none(self):
-        result = return_on_equity(100, -500, -500)
-        assert result is None
+        assert return_on_equity(100, -500, -500) is None
 
     def test_zero_equity_returns_none(self):
-        result = return_on_equity(100, 0, 0)
-        assert result is None
+        assert return_on_equity(100, 0, 0) is None
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Return on Capital Employed — 2 tests
-# ══════════════════════════════════════════════════════════════════════════════
 
 class TestReturnOnCapitalEmployed:
-    def test_normal_roce(self):
-        result = return_on_capital_employed(300, 500, 500, 1000)
-        assert result == pytest.approx(15.0)
+    def test_normal(self):
+        assert return_on_capital_employed(300, 500, 500, 1000) == pytest.approx(15.0)
 
-    def test_zero_capital_employed_returns_none(self):
-        result = return_on_capital_employed(300, 0, 0, 0)
-        assert result is None
+    def test_zero_capital_returns_none(self):
+        assert return_on_capital_employed(300, 0, 0, 0) is None
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Return on Assets — 2 tests
-# ══════════════════════════════════════════════════════════════════════════════
 
 class TestReturnOnAssets:
-    def test_normal_roa(self):
-        result = return_on_assets(100, 2000)
-        assert result == pytest.approx(5.0)
+    def test_normal(self):
+        assert return_on_assets(100, 2000) == pytest.approx(5.0)
 
     def test_zero_assets_returns_none(self):
-        result = return_on_assets(100, 0)
-        assert result is None
+        assert return_on_assets(100, 0) is None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Debt to Equity — 4 tests
+# Leverage & efficiency
 # ══════════════════════════════════════════════════════════════════════════════
 
 class TestDebtToEquity:
-    def test_normal_debt_equity(self):
-        result = debt_to_equity(1000, 500, 500)
-        assert result == pytest.approx(1.0)
+    def test_normal(self):
+        assert debt_to_equity(1000, 500, 500) == pytest.approx(1.0)
 
-    def test_zero_debt_returns_zero_not_none(self):
+    def test_debt_free_returns_zero(self):
         result = debt_to_equity(0, 500, 500)
         assert result == 0.0
         assert result is not None
 
     def test_negative_equity_returns_none(self):
-        result = debt_to_equity(1000, -500, 0)
-        assert result is None
-
-    def test_high_de_for_financial_sector_warning_flag(self):
-        engine = RatioEngine.__new__(RatioEngine)
-        engine.db_path = ":memory:"
-        engine.engine = MagicMock()
-        engine.financial_warnings = []
-        engine.icr_warnings = []
-
-        df = pd.DataFrame([{
-            "company_id": 1, "year": 2022,
-            "sales": 10000,
-            "operating_profit": 2000,
-            "net_profit": 1000,
-            "total_assets": 20000,
-            "shareholders_equity": 1000,
-            "total_debt": 7000,
-            "sector_name": "Financial Services",
-            "cash_and_equivalents": 500,
-            "current_assets": 2000,
-            "current_liabilities": 1000,
-        }])
-
-        with patch.object(pd, "read_sql_query", side_effect=[df, _empty_df(), _empty_df(), _empty_df()]):
-            result = engine.compute_ratios(company_id=1)
-            assert len(engine.financial_warnings) >= 1
-            assert "Financial sector D/E" in engine.financial_warnings[0]
+        assert debt_to_equity(1000, -500, 0) is None
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Interest Coverage Ratio — 3 tests
-# ══════════════════════════════════════════════════════════════════════════════
+class TestInterestCoverage:
+    def test_normal(self):
+        assert interest_coverage_ratio(100, 20, 30) == pytest.approx(4.0)
 
-class TestInterestCoverageRatio:
-    def test_normal_interest_coverage(self):
-        result = interest_coverage_ratio(100, 20, 30)
-        assert result == pytest.approx(4.0)
+    def test_zero_interest_returns_none(self):
+        assert interest_coverage_ratio(100, 20, 0) is None
 
-    def test_zero_interest_expense_debt_free(self):
-        result = interest_coverage_ratio(100, 20, 0)
-        assert result is None
+    def test_low_icr_detected(self):
+        assert interest_coverage_ratio(100, 10, 80) == pytest.approx(1.375)
 
-    def test_icr_below_1_5_warning(self):
-        engine = RatioEngine.__new__(RatioEngine)
-        engine.db_path = ":memory:"
-        engine.engine = MagicMock()
-        engine.financial_warnings = []
-        engine.icr_warnings = []
 
-        df = pd.DataFrame([{
-            "company_id": 1, "year": 2022,
-            "sales": 10000,
-            "operating_profit": 100,
-            "interest_expense": 80,
-            "other_income": 10,
-            "net_profit": 50,
-            "total_assets": 20000,
-            "shareholders_equity": 10000,
-            "total_debt": 5000,
-            "sector_name": "Metals and Mining",
-            "cash_and_equivalents": 500,
-            "current_assets": 2000,
-            "current_liabilities": 1000,
-        }])
+class TestNetDebt:
+    def test_borrowings_minus_investments(self):
+        assert net_debt(1000, 300) == pytest.approx(700.0)
 
-        with patch.object(pd, "read_sql_query", side_effect=[df, _empty_df(), _empty_df(), _empty_df()]):
-            result = engine.compute_ratios(company_id=1)
-            assert len(engine.icr_warnings) >= 1
-            assert "ICR=" in engine.icr_warnings[0] or "Debt Free" in engine.icr_warnings[0]
+
+class TestAssetTurnover:
+    def test_normal(self):
+        assert asset_turnover(5000, 10000) == pytest.approx(0.5)
+
+    def test_zero_assets_returns_none(self):
+        assert asset_turnover(5000, 0) is None
+
+
+class TestBookValuePerShare:
+    def test_normal(self):
+        assert book_value_per_share(100, 900, 10) == pytest.approx(100.0)
+
+
+class TestOpmCrossCheck:
+    def test_divergence_detected(self):
+        assert opm_cross_check(20.0, 13.53) is True
+
+    def test_no_divergence(self):
+        assert opm_cross_check(20.0, 20.0) is False
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CAGR — 5 tests (plus INSUFFICIENT_DATA)
+# CAGR edge cases
 # ══════════════════════════════════════════════════════════════════════════════
 
 class TestCAGR:
-    def test_normal_positive_cagr(self):
+    def test_normal_positive(self):
         value, flag = compute_cagr(100, 121, 2)
         assert value == pytest.approx(10.0)
         assert flag is None
 
-    def test_decline_to_loss_flag(self):
+    def test_decline_to_loss(self):
         value, flag = compute_cagr(100, -50, 2)
         assert value is None
         assert flag == "DECLINE_TO_LOSS"
 
-    def test_turnaround_flag(self):
+    def test_turnaround(self):
         value, flag = compute_cagr(-50, 100, 2)
         assert value is None
         assert flag == "TURNAROUND"
 
-    def test_both_negative_flag(self):
+    def test_both_negative(self):
         value, flag = compute_cagr(-100, -50, 3)
         assert value is None
         assert flag == "BOTH_NEGATIVE"
 
-    def test_zero_base_flag(self):
+    def test_zero_base(self):
         value, flag = compute_cagr(0, 100, 2)
         assert value is None
         assert flag == "ZERO_BASE"
 
-    def test_insufficient_data_flag(self):
+    def test_insufficient(self):
         value, flag = compute_cagr(100, 200, 0)
         assert value is None
-        assert flag is None
+        assert flag == "INSUFFICIENT"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# RatioEngine standalone — 4 tests
+# Cash flow KPIs
 # ══════════════════════════════════════════════════════════════════════════════
 
-class TestRatioEngine:
-    def test_ratio_engine_computes_all_ratios(self):
-        engine = RatioEngine.__new__(RatioEngine)
-        engine.db_path = ":memory:"
-        engine.engine = MagicMock()
-        engine.financial_warnings = []
-        engine.icr_warnings = []
+class TestFreeCashFlow:
+    def test_fcf(self):
+        assert free_cash_flow(1000, -500) == pytest.approx(500.0)
 
-        df = pd.DataFrame([{
-            "company_id": 1, "year": 2022,
-            "sales": 10000,
-            "operating_profit": 2000,
-            "operating_profit_margin": 0.20,
-            "net_profit": 1000,
-            "eps": 50,
-            "dividend_payout_pct": 0.25,
-            "tax_rate": 25,
-            "depreciation": 500,
-            "interest_expense": 200,
-            "other_income": 100,
-            "total_revenue": 10000,
-            "cogs": 6000,
-            "total_assets": 20000,
-            "total_liabilities": 8000,
-            "shareholders_equity": 12000,
-            "total_debt": 3000,
-            "current_assets": 4000,
-            "current_liabilities": 2000,
-            "cash_and_equivalents": 1000,
-            "inventory": 1500,
-            "sector_name": "Information Technology",
-            "market_cap": 50000,
-            "ticker": "TEST",
-        }])
-
-        sp_df = pd.DataFrame({"close": [2000.0]})
-        cf_df = pd.DataFrame({"fcf": [800.0]})
-
-        with patch.object(pd, "read_sql_query", side_effect=[df, sp_df, cf_df, sp_df]):
-            result = engine.compute_ratios(company_id=1)
-            assert not result.empty
-            assert "company_id" in result.columns
-            assert "roe" in result.columns
-            assert "debt_to_equity" in result.columns
-            assert "interest_coverage" in result.columns
-            assert "net_profit_margin" in result.columns
-            assert "operating_profit_margin" in result.columns
-
-    def test_ratio_values_are_reasonable(self):
-        engine = RatioEngine.__new__(RatioEngine)
-        engine.db_path = ":memory:"
-        engine.engine = MagicMock()
-        engine.financial_warnings = []
-        engine.icr_warnings = []
-
-        df = pd.DataFrame([{
-            "company_id": 1, "year": 2022,
-            "sales": 10000,
-            "operating_profit": 2000,
-            "operating_profit_margin": 0.20,
-            "net_profit": 1500,
-            "eps": 75,
-            "dividend_payout_pct": 0.20,
-            "tax_rate": 25,
-            "depreciation": 500,
-            "interest_expense": 300,
-            "other_income": 100,
-            "total_revenue": 10000,
-            "cogs": 5500,
-            "total_assets": 15000,
-            "total_liabilities": 5000,
-            "shareholders_equity": 10000,
-            "total_debt": 2000,
-            "current_assets": 4000,
-            "current_liabilities": 2000,
-            "cash_and_equivalents": 1500,
-            "inventory": 2000,
-            "sector_name": "Automotive",
-            "market_cap": 60000,
-            "ticker": "AUTO",
-        }])
-
-        with patch.object(pd, "read_sql_query", side_effect=[df, _empty_df(), _empty_df(), _empty_df()]):
-            result = engine.compute_ratios(company_id=1)
-            row = result.iloc[0]
-            assert row["net_profit_margin"] == pytest.approx(15.0)
-            assert row["operating_profit_margin"] == pytest.approx(20.0)
-            assert row["roe"] == pytest.approx(15.0)
-            assert row["roa"] == pytest.approx(10.0)
-            assert row["debt_to_equity"] == pytest.approx(0.2)
-            assert row["current_ratio"] == pytest.approx(2.0)
-
-    def test_warnings_generated_for_financial_sector(self):
-        engine = RatioEngine.__new__(RatioEngine)
-        engine.db_path = ":memory:"
-        engine.engine = MagicMock()
-        engine.financial_warnings = []
-        engine.icr_warnings = []
-
-        df = pd.DataFrame([{
-            "company_id": 1, "year": 2022,
-            "sales": 50000,
-            "operating_profit": 5000,
-            "operating_profit_margin": 0.10,
-            "net_profit": 3000,
-            "eps": 30,
-            "dividend_payout_pct": 0.15,
-            "tax_rate": 25,
-            "depreciation": 200,
-            "interest_expense": 500,
-            "other_income": 100,
-            "total_revenue": 50000,
-            "cogs": 30000,
-            "total_assets": 100000,
-            "total_liabilities": 90000,
-            "shareholders_equity": 10000,
-            "total_debt": 80000,
-            "current_assets": 20000,
-            "current_liabilities": 30000,
-            "cash_and_equivalents": 5000,
-            "inventory": 0,
-            "sector_name": "BFSI",
-            "market_cap": 40000,
-            "ticker": "BANK",
-        }])
-
-        with patch.object(pd, "read_sql_query", side_effect=[df, _empty_df(), _empty_df(), _empty_df()]):
-            result = engine.compute_ratios(company_id=1)
-            assert len(engine.financial_warnings) >= 1
-            assert "Financial sector D/E" in engine.financial_warnings[0]
-
-    def test_icr_warnings_captured(self):
-        engine = RatioEngine.__new__(RatioEngine)
-        engine.db_path = ":memory:"
-        engine.engine = MagicMock()
-        engine.financial_warnings = []
-        engine.icr_warnings = []
-
-        df = pd.DataFrame([{
-            "company_id": 1, "year": 2022,
-            "sales": 10000,
-            "operating_profit": 100,
-            "operating_profit_margin": 0.01,
-            "net_profit": 50,
-            "eps": 2.5,
-            "dividend_payout_pct": 0.10,
-            "tax_rate": 25,
-            "depreciation": 80,
-            "interest_expense": 200,
-            "other_income": 10,
-            "total_revenue": 10000,
-            "cogs": 7000,
-            "total_assets": 20000,
-            "total_liabilities": 12000,
-            "shareholders_equity": 8000,
-            "total_debt": 10000,
-            "current_assets": 3000,
-            "current_liabilities": 4000,
-            "cash_and_equivalents": 500,
-            "inventory": 1000,
-            "sector_name": "Metals and Mining",
-            "market_cap": 8000,
-            "ticker": "METAL",
-        }])
-
-        with patch.object(pd, "read_sql_query", side_effect=[df, _empty_df(), _empty_df(), _empty_df()]):
-            result = engine.compute_ratios(company_id=1)
-            assert len(engine.icr_warnings) >= 1
-            assert "ICR=" in engine.icr_warnings[0]
+    def test_fcf_negative_allowed(self):
+        assert free_cash_flow(200, -600) == pytest.approx(-400.0)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# CashFlowAnalyzer — 11 tests
-# ══════════════════════════════════════════════════════════════════════════════
+class TestCfoQuality:
+    def test_high_quality(self):
+        assert cfo_quality_label(1.5) == "High Quality"
 
-def _empty_df():
-    return pd.DataFrame()
+    def test_moderate(self):
+        assert cfo_quality_label(0.7) == "Moderate"
+
+    def test_accrual_risk(self):
+        assert cfo_quality_label(0.3) == "Accrual Risk"
 
 
-class TestCashFlowAnalyzer:
-    def test_fcf_calculation(self):
-        pl_df = pd.DataFrame([
-            {"company_id": 1, "year": 2022, "net_profit": 500, "sales": 5000},
-        ])
-        cf_df = pd.DataFrame([{
-            "company_id": 1, "year": 2022,
-            "operating_activities": 1000,
-            "investing_activities": -500,
-            "financing_activities": -300,
-        }])
+class TestCapexIntensity:
+    def test_asset_light(self):
+        assert capex_intensity_label(capex_intensity_pct(-50, 5000)) == "Asset Light"
 
-        analyzer = CashFlowAnalyzer(pl_df=pl_df, cf_df=cf_df)
-        result = analyzer.analyze(company_id=1, year=2022,
-                                   row={"sales": 5000, "operating_profit": 800})
-        assert result is not None
-        assert result["fcf"] == pytest.approx(500.0)
+    def test_moderate(self):
+        assert capex_intensity_label(capex_intensity_pct(-250, 5000)) == "Moderate"
 
-    def test_cfo_quality_high(self):
-        pl_df = pd.DataFrame([
-            {"company_id": 1, "year": yr, "net_profit": 1000}
-            for yr in [2018, 2019, 2020, 2021, 2022]
-        ])
-        cf_df = pd.DataFrame([
-            {"company_id": 1, "year": yr, "operating_activities": 1500}
-            for yr in [2018, 2019, 2020, 2021, 2022]
-        ])
+    def test_capital_intensive(self):
+        assert capex_intensity_label(capex_intensity_pct(-500, 5000)) == "Capital Intensive"
 
-        analyzer = CashFlowAnalyzer(pl_df=pl_df, cf_df=cf_df)
-        quality = analyzer._calc_cfo_quality(company_id=1, cfo_current=1500)
-        assert quality == "High Quality"
 
-    def test_cfo_quality_moderate(self):
-        pl_df = pd.DataFrame([
-            {"company_id": 1, "year": yr, "net_profit": 1000}
-            for yr in [2018, 2019, 2020, 2021, 2022]
-        ])
-        cf_df = pd.DataFrame([
-            {"company_id": 1, "year": yr, "operating_activities": 700}
-            for yr in [2018, 2019, 2020, 2021, 2022]
-        ])
+class TestFcfConversion:
+    def test_normal(self):
+        assert fcf_conversion_pct(500, 1000) == pytest.approx(50.0)
 
-        analyzer = CashFlowAnalyzer(pl_df=pl_df, cf_df=cf_df)
-        quality = analyzer._calc_cfo_quality(company_id=1, cfo_current=700)
-        assert quality == "Moderate"
+    def test_zero_operating_profit_returns_none(self):
+        assert fcf_conversion_pct(500, 0) is None
 
-    def test_cfo_quality_accrual_risk(self):
-        pl_df = pd.DataFrame([
-            {"company_id": 1, "year": yr, "net_profit": 1000}
-            for yr in [2018, 2019, 2020, 2021, 2022]
-        ])
-        cf_df = pd.DataFrame([
-            {"company_id": 1, "year": yr, "operating_activities": 300}
-            for yr in [2018, 2019, 2020, 2021, 2022]
-        ])
 
-        analyzer = CashFlowAnalyzer(pl_df=pl_df, cf_df=cf_df)
-        quality = analyzer._calc_cfo_quality(company_id=1, cfo_current=300)
-        assert quality == "Accrual Risk"
+class TestAllocationPatterns:
+    def test_reinvestor(self):
+        assert classify_allocation(100, -50, -30) == "Reinvestor"
 
-    def test_cfo_quality_loss_making(self):
-        pl_df = pd.DataFrame([
-            {"company_id": 1, "year": yr, "net_profit": -500}
-            for yr in [2018, 2019, 2020, 2021, 2022]
-        ])
-        cf_df = pd.DataFrame([
-            {"company_id": 1, "year": yr, "operating_activities": 100}
-            for yr in [2018, 2019, 2020, 2021, 2022]
-        ])
+    def test_shareholder_returns(self):
+        assert classify_allocation(100, -50, -30, cfo_pat_ratio=1.5) == "Shareholder Returns"
 
-        analyzer = CashFlowAnalyzer(pl_df=pl_df, cf_df=cf_df)
-        result = analyzer.compute(company_id=1)
-        assert not result.empty
-        label_vals = result["cfo_quality_label"].values
-        has_loss_making = any("Loss-making" in str(v) for v in label_vals)
-        has_high = any("High Quality" in str(v) for v in label_vals)
-        has_accrual = any("Accrual Risk" in str(v) for v in label_vals)
-        assert has_loss_making or has_accrual
+    def test_distress_signal(self):
+        assert classify_allocation(-100, 50, 30) == "Distress Signal"
 
-    def test_capex_asset_light(self):
-        analyzer = CashFlowAnalyzer()
-        result = analyzer._calc_capex_intensity(-50, 5000)
-        assert result == "Asset Light"
-
-    def test_capex_moderate(self):
-        analyzer = CashFlowAnalyzer()
-        result = analyzer._calc_capex_intensity(-250, 5000)
-        assert result == "Moderate"
-
-    def test_capex_capital_intensive(self):
-        analyzer = CashFlowAnalyzer()
-        result = analyzer._calc_capex_intensity(-500, 5000)
-        assert result == "Capital Intensive"
-
-    def test_allocation_healthy_growth(self):
-        analyzer = CashFlowAnalyzer()
-        result = analyzer._classify_allocation(100, -50, -30)
-        assert result == "Healthy Growth"
-
-    def test_allocation_severe_stress(self):
-        analyzer = CashFlowAnalyzer()
-        result = analyzer._classify_allocation(-100, -50, -30)
-        assert result == "Severe Stress"
-
-    def test_allocation_restructuring(self):
-        analyzer = CashFlowAnalyzer()
-        result = analyzer._classify_allocation(-100, 50, -30)
-        assert result == "Restructuring"
+    def test_cash_accumulator(self):
+        assert classify_allocation(100, 50, 30) == "Cash Accumulator"

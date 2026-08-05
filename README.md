@@ -220,12 +220,12 @@ Start with `make api` or `uvicorn src.api:app --reload`.
 make test
 ```
 
-**121 tests, 0 failures,** runs in ~2 seconds:
+**125 tests, 0 failures,** runs in ~2 seconds:
 
 | Module | Tests | What's covered |
 |--------|-------|---------------|
 | `test_normaliser.py` | 66 | Ticker (15), year (21), numeric (10), sector (3), DQ rules (16) + export |
-| `test_ratios.py` | 40 | NPM, OPM, ROE, ROCE, ROA, D/E, ICR, CAGR (6 edge cases), RatioEngine, CashFlow (11) |
+| `test_ratios.py` | 44 | NPM, OPM, ROE, ROCE, ROA, D/E, ICR, net debt, CAGR (6 edge cases), CFO quality, capex intensity, allocation patterns |
 | `test_screener_dq.py` | 15 | Validator integration (6), peer metrics (3), screener config (6) |
 
 All tests use mock data — no database required to run.
@@ -269,7 +269,7 @@ nifty100-analytics/
 ├── tests/
 │   ├── etl/test_normaliser.py     # 66 tests
 │   └── kpi/
-│       ├── test_ratios.py         # 40 tests
+│       ├── test_ratios.py         # 44 tests
 │       └── test_screener_dq.py    # 15 tests
 ├── Makefile                        # 10 targets
 ├── requirements.txt               # 20 Python packages
@@ -304,7 +304,7 @@ nifty100-analytics/
 | `make export` | Export capital allocation + edge-case log |
 | `make radar` | Generate radar chart PNGs |
 | `make report` | Run screener → Excel workbook |
-| `make test` | Run all 121 tests |
+| `make test` | Run all 125 tests |
 | `make api` | Start FastAPI with hot reload |
 | `make dashboard` | Start API via `python -m src.api` |
 | `make clean` | Wipe database, outputs, and caches |

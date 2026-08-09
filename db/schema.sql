@@ -205,6 +205,19 @@ CREATE TABLE IF NOT EXISTS market_cap (
     UNIQUE (company_id, year)
 );
 
+-- ── peer_percentiles (Sprint 3 — percentile rank per peer group) ──
+CREATE TABLE IF NOT EXISTS peer_percentiles (
+    pp_id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id      INTEGER NOT NULL,
+    year            INTEGER NOT NULL,
+    metric          TEXT NOT NULL,
+    value           REAL,
+    percentile_rank REAL,
+    peer_group      TEXT,
+    FOREIGN KEY (company_id) REFERENCES companies(company_id),
+    UNIQUE (company_id, year, metric, peer_group)
+);
+
 -- ═══════════════════════════════════════════════════════════════
 -- Indexes on join/query columns.
 -- ═══════════════════════════════════════════════════════════════
@@ -219,6 +232,7 @@ CREATE INDEX IF NOT EXISTS idx_cf_company_year ON cashflow(company_id, year);
 CREATE INDEX IF NOT EXISTS idx_sp_company_date  ON stock_prices(company_id, date);
 CREATE INDEX IF NOT EXISTS idx_fr_company_year  ON financial_ratios(company_id, year);
 CREATE INDEX IF NOT EXISTS idx_mc_company_year  ON market_cap(company_id, year);
+CREATE INDEX IF NOT EXISTS idx_pp_group_metric  ON peer_percentiles(peer_group, metric);
 
 CREATE INDEX IF NOT EXISTS idx_documents_company_id ON documents(company_id);
 CREATE INDEX IF NOT EXISTS idx_analysis_company_id  ON analysis(company_id);

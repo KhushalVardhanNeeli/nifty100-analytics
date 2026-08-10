@@ -1,223 +1,169 @@
+"""Radar charts — Sprint 3.
+
+8-axis polar chart per company: ROE, ROCE, Net Profit Margin, D/E (inverted),
+FCF, PAT CAGR 5y, Revenue CAGR 5y, Composite Score. Company polygon is
+overlaid on the peer-group average (dashed). Companies without a peer group
+get a single-metric standalone chart vs the Nifty 100 average.
+"""
+
 import sqlite3
-import numpy as np
+from pathlib import Path
+
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from pathlib import Path
+import numpy as np
+import pandas as pd
+
+METRICS = [
+    ("roe", "return_on_equity_pct", False, "ROE"),
+    ("roce", "return_on_capital_employed_pct", False, "ROCE"),
+    ("net_profit_margin", "net_profit_margin_pct", False, "Net Profit Margin"),
+    ("debt_to_equity", "debt_to_equity", True, "D/E (inv)"),
+    ("fcf", "free_cash_flow_cr", False, "FCF"),
+    ("pat_cagr_5y", "pat_cagr_5yr", False, "PAT CAGR 5y"),
+    ("revenue_cagr_5y", "revenue_cagr_5yr", False, "Rev CAGR 5y"),
+    ("composite_score", "composite_score", False, "Composite Score"),
+]
 
 
-def _get_conn(db_path):
+def _rank_within(values: pd.Series, invert: bool = False) -> pd.Series:
+    s = values.dropna()
+    if len(s) < 2:
+        return pd.Series(np.nan, index=values.index)
+    pct = s.rank(pct=True) * 100
+    if invert:
+        pct = 100 - pct
+    return pct.reindex(values.index)
+
+
+_composite_cache: dict = {}
+
+
+def _load_composite(db_path: str) -> dict:
+    if db_path in _composite_cache:
+        return _composite_cache[db_path]
+    from src.screener.engine import ScreenerEngine
+    eng = ScreenerEngine(db_path=db_path)
+    df = eng.load_data()
+    df = eng.composite_score(df)
+    result = {int(k): (None if pd.isna(v) else float(v))
+              for k, v in zip(df["company_id"], df["composite_score"])}
+    _composite_cache[db_path] = result
+    return result
+
+
+def _load_latest(db_path: str):
     conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    return conn
+    year = int(pd.read_sql("SELECT MAX(year) AS y FROM financial_ratios", conn).iloc[0]["y"])
+    fr = pd.read_sql("SELECT * FROM financial_ratios WHERE year = ?", conn, params=[year])
+    groups = pd.read_sql("SELECT company_id, peer_group_name FROM peer_groups", conn)
+    companies = pd.read_sql(
+        "SELECT company_id, ticker, company_name, broad_sector FROM companies", conn)
+    conn.close()
+    return year, fr, groups, companies
 
 
-def _compute_cagr(conn, company_id, period=3, latest_year=None):
-    if latest_year is None:
-        row = conn.execute("SELECT MAX(year) as max_year FROM profitandloss").fetchone()
-        latest_year = row["max_year"]
+def generate_radar(company_id: int, year: int, db_path: str,
+                   output_dir="reports/radar_charts/") -> str:
+    year, fr, groups, companies = _load_latest(db_path)
+    comp = companies[companies["company_id"] == company_id]
+    if comp.empty or fr.empty:
+        raise ValueError(f"Company {company_id} not found")
+    ticker = comp.iloc[0]["ticker"]
+    composite_map = _load_composite(db_path)
+    fr = fr.copy()
+    fr["composite_score"] = fr["company_id"].map(composite_map)
 
-    start_year = latest_year - period
-    rows = conn.execute(
-        """SELECT year, sales FROM profitandloss
-           WHERE company_id = ? AND year IN (?, ?)
-           ORDER BY year""",
-        [company_id, start_year, latest_year],
-    ).fetchall()
+    grp = groups[groups["company_id"] == company_id]
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    if len(rows) < 2:
-        return np.nan
+    if grp.empty:
+        return _standalone_chart(ticker, company_id, fr, composite_map, out_dir, year)
 
-    sales_start = rows[0]["sales"]
-    sales_end = rows[-1]["sales"]
+    group_name = grp.iloc[0]["peer_group_name"]
+    group_ids = set(groups[groups["peer_group_name"] == group_name]["company_id"])
+    peers = fr[fr["company_id"].isin(group_ids)].copy()
 
-    if sales_start <= 0:
-        return np.nan
+    labels = [m[3] for m in METRICS]
+    comp_vals = []
+    peer_avgs = []
+    for name, col, invert, _ in METRICS:
+        if col not in peers.columns:
+            comp_vals.append(0.0)
+            peer_avgs.append(0.0)
+            continue
+        ranks = _rank_within(peers[col], invert)
+        cv = ranks.get(company_id)
+        cv = 0.0 if cv is None or pd.isna(cv) else float(cv)
+        valid = ranks[ranks.notna()]
+        pv = float(valid.mean()) if not valid.empty else 0.0
+        comp_vals.append(cv)
+        peer_avgs.append(pv)
 
-    cagr = ((sales_end / sales_start) ** (1.0 / period) - 1) * 100
-    return cagr
+    for i in range(len(comp_vals)):
+        if pd.isna(comp_vals[i]):
+            comp_vals[i] = 0.0
+        if pd.isna(peer_avgs[i]):
+            peer_avgs[i] = 0.0
 
+    n = len(labels)
+    angles = np.linspace(0, 2 * np.pi, n, endpoint=False).tolist()
+    angles += [angles[0]]
+    cv = comp_vals + [comp_vals[0]]
+    pv = peer_avgs + [peer_avgs[0]]
 
-def _get_peer_averages(conn, company_id, sector_name):
-    ratios = conn.execute(
-        """SELECT fr.* FROM financial_ratios fr
-           JOIN companies c ON fr.company_id = c.company_id
-           WHERE c.sector_name = ? AND fr.company_id != ?
-           AND fr.year = (SELECT MAX(year) FROM financial_ratios)""",
-        [sector_name, company_id],
-    ).fetchall()
+    fig, ax = plt.subplots(figsize=(9, 9), subplot_kw=dict(polar=True))
+    ax.fill(angles, cv, alpha=0.25, color="#1f77b4")
+    ax.plot(angles, cv, "o-", linewidth=2, color="#1f77b4", label=f"{ticker}")
+    ax.plot(angles, pv, "o--", linewidth=1.5, color="gray", label=f"{group_name} avg")
+    ax.set_xticks(angles[:-1])
+    ax.set_xticklabels(labels, fontsize=9)
+    ax.set_ylim(0, 100)
+    ax.set_yticks([20, 40, 60, 80, 100])
+    ax.set_yticklabels(["20", "40", "60", "80", "100"], fontsize=8, color="gray")
+    plt.title(f"{ticker} - {year} vs {group_name} average", fontsize=14, fontweight="bold", pad=20)
+    plt.legend(loc="lower right", bbox_to_anchor=(1.15, -0.05))
 
-    if not ratios:
-        return {}
-
-    metrics = [
-        "roe", "roce", "net_profit_margin", "asset_turnover",
-        "debt_to_equity", "interest_coverage", "fcf_yield",
-    ]
-
-    avg = {}
-    for m in metrics:
-        vals = [r[m] for r in ratios if r[m] is not None]
-        if vals:
-            avg[m] = np.mean(vals)
-        else:
-            avg[m] = np.nan
-
-    pids = [r["company_id"] for r in ratios]
-    cagrs = []
-    for pid in pids[:20]:
-        c = _compute_cagr(conn, pid, period=3)
-        if not np.isnan(c):
-            cagrs.append(c)
-    avg["revenue_growth"] = np.mean(cagrs) if cagrs else np.nan
-
-    return avg
-
-
-def generate_radar(company_id, year, db_path, output_dir="reports/radar_charts/"):
-    conn = _get_conn(db_path)
-    try:
-        company = conn.execute(
-            "SELECT ticker, company_name, sector_name FROM companies WHERE company_id = ?",
-            [company_id],
-        ).fetchone()
-        if not company:
-            raise ValueError(f"Company {company_id} not found")
-
-        ticker = company["ticker"]
-        sector_name = company["sector_name"]
-
-        ratios = conn.execute(
-            "SELECT * FROM financial_ratios WHERE company_id = ? AND year = ?",
-            [company_id, year],
-        ).fetchone()
-
-        if not ratios:
-            raise ValueError(f"No ratios for company {company_id} year {year}")
-
-        revenue_growth = _compute_cagr(conn, company_id, period=3, latest_year=year)
-
-        peer_avg = _get_peer_averages(conn, company_id, sector_name)
-
-        axes_labels = [
-            "ROE",
-            "ROCE",
-            "Net Profit\nMargin",
-            "Revenue\nGrowth",
-            "Asset\nTurnover",
-            "Debt/Equity\n(inv)",
-            "Interest\nCoverage",
-            "FCF Yield",
-        ]
-
-        def safe_val(val):
-            if val is None or (isinstance(val, float) and np.isnan(val)):
-                return np.nan
-            return float(val)
-
-        company_values = [
-            safe_val(ratios["roe"]),
-            safe_val(ratios["roce"]),
-            safe_val(ratios["net_profit_margin"]),
-            safe_val(revenue_growth),
-            safe_val(ratios["asset_turnover"]),
-            safe_val(1.0 / ratios["debt_to_equity"]) if safe_val(ratios["debt_to_equity"]) and safe_val(ratios["debt_to_equity"]) > 0 else np.nan,
-            safe_val(ratios["interest_coverage"]),
-            safe_val(ratios["fcf_yield"]),
-        ]
-
-        peer_values = [
-            safe_val(peer_avg.get("roe", np.nan)),
-            safe_val(peer_avg.get("roce", np.nan)),
-            safe_val(peer_avg.get("net_profit_margin", np.nan)),
-            safe_val(peer_avg.get("revenue_growth", np.nan)),
-            safe_val(peer_avg.get("asset_turnover", np.nan)),
-            safe_val(1.0 / peer_avg.get("debt_to_equity", np.nan)) if safe_val(peer_avg.get("debt_to_equity", np.nan)) and safe_val(peer_avg.get("debt_to_equity", np.nan)) > 0 else np.nan,
-            safe_val(peer_avg.get("interest_coverage", np.nan)),
-            safe_val(peer_avg.get("fcf_yield", np.nan)),
-        ]
-
-        valid_axes = [
-            i for i, (cv, pv) in enumerate(zip(company_values, peer_values))
-            if not (np.isnan(cv) and np.isnan(pv))
-        ]
-
-        if len(valid_axes) < 3:
-            raise ValueError(f"Not enough valid metrics for radar chart (company {ticker})")
-
-        labels = [axes_labels[i] for i in valid_axes]
-        comp_vals = [company_values[i] for i in valid_axes]
-        peer_vals = [peer_values[i] for i in valid_axes]
-
-        for i in range(len(comp_vals)):
-            if np.isnan(comp_vals[i]):
-                comp_vals[i] = 0
-            if np.isnan(peer_vals[i]):
-                peer_vals[i] = 0
-
-        max_vals = [max(abs(comp_vals[i]), abs(peer_vals[i])) for i in range(len(comp_vals))]
-        max_vals = [max(v, 0.01) for v in max_vals]
-
-        comp_norm = [comp_vals[i] / max_vals[i] * 100 for i in range(len(comp_vals))]
-        peer_norm = [peer_vals[i] / max_vals[i] * 100 for i in range(len(comp_vals))]
-
-        n = len(labels)
-        angles = np.linspace(0, 2 * np.pi, n, endpoint=False).tolist()
-        angles += [angles[0]]
-
-        comp_norm += [comp_norm[0]]
-        peer_norm += [peer_norm[0]]
-
-        fig, ax = plt.subplots(figsize=(10, 10), subplot_kw=dict(polar=True))
-
-        ax.fill(angles, comp_norm, alpha=0.25, color="#1f77b4")
-        ax.plot(angles, comp_norm, "o-", linewidth=2, color="#1f77b4", label=f"{ticker}")
-
-        ax.fill(angles, peer_norm, alpha=0.10, color="gray")
-        ax.plot(angles, peer_norm, "o--", linewidth=1.5, color="gray", label=f"{sector_name} Avg")
-
-        ax.set_xticks(angles[:-1])
-        ax.set_xticklabels(labels, fontsize=10)
-
-        ax.set_rlabel_position(30)
-        ax.set_yticks([20, 40, 60, 80, 100])
-        ax.set_yticklabels(["20", "40", "60", "80", "100"], fontsize=8, color="gray")
-        ax.set_ylim(0, 100)
-
-        plt.title(f"{ticker} - {year} vs {sector_name} Average", fontsize=14, fontweight="bold", pad=20)
-        plt.legend(loc="lower right", bbox_to_anchor=(0.1, -0.05))
-
-        output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
-        file_path = output_path / f"{ticker}_{year}_radar.png"
-        plt.savefig(file_path, dpi=300, bbox_inches="tight")
-        plt.close(fig)
-
-        return str(file_path)
-
-    finally:
-        conn.close()
+    out = out_dir / f"{ticker}_{year}_radar.png"
+    plt.savefig(out, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    return str(out)
 
 
-def generate_all(db_path, output_dir="reports/radar_charts/"):
-    conn = _get_conn(db_path)
-    try:
-        latest_year = conn.execute(
-            "SELECT MAX(year) as max_year FROM financial_ratios"
-        ).fetchone()["max_year"]
+def _standalone_chart(ticker, company_id, fr, composite_map, out_dir, year) -> str:
+    comp_score = composite_map.get(company_id)
+    avg = np.nanmean([v for v in composite_map.values() if pd.notna(v)])
 
-        companies = conn.execute("SELECT company_id FROM companies").fetchall()
+    fig, ax = plt.subplots(figsize=(8, 4))
+    labels = [ticker, "Nifty 100 Avg"]
+    vals = [comp_score if pd.notna(comp_score) else 0, avg if pd.notna(avg) else 0]
+    bars = ax.bar(labels, vals, color=["#1f77b4", "gray"])
+    ax.set_ylabel("Composite Quality Score")
+    ax.set_title(f"{ticker} - Composite Score vs Nifty 100 Average ({year})", fontsize=13, fontweight="bold")
+    ax.set_ylim(0, 100)
+    for b, v in zip(bars, vals):
+        ax.text(b.get_x() + b.get_width() / 2, v + 1, f"{v:.1f}", ha="center")
+    plt.tight_layout()
 
-        generated = []
-        for company in companies:
-            company_id = company["company_id"]
-            try:
-                path = generate_radar(company_id, latest_year, db_path, output_dir)
-                generated.append(path)
-            except Exception:
-                pass
+    out = out_dir / f"{ticker}_{year}_radar.png"
+    plt.savefig(out, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    return str(out)
 
-        return generated
 
-    finally:
-        conn.close()
+def generate_all(db_path="db/nifty100.db", output_dir="reports/radar_charts/") -> list:
+    year, fr, _, _ = _load_latest(db_path)
+    generated = []
+    for cid in fr["company_id"].unique():
+        try:
+            generated.append(generate_radar(int(cid), year, db_path, output_dir))
+        except Exception:
+            continue
+    print(f"[Radar] Generated {len(generated)} charts")
+    return generated
+
+
+if __name__ == "__main__":
+    generate_all()

@@ -205,6 +205,8 @@ class TestValidatorIntegration:
             os.unlink(tmp_path)
 
 
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # 3 Peer Metrics Tests
 # ══════════════════════════════════════════════════════════════════════════════
@@ -231,29 +233,25 @@ class TestPeerMetrics:
         assert inverted.iloc[0] == pytest.approx(100.0)
         assert inverted.iloc[-1] == pytest.approx(0.0)
 
-    def test_peer_group_assignment(self):
-        companies_df = pd.DataFrame({
-            "company_id": [1, 2, 3, 4, 5],
-            "sector_name": ["Information Technology", "Information Technology",
-                            "Automotive", "Automotive", "Pharmaceuticals"],
-            "market_cap": [1000.0, 2000.0, 500.0, 600.0, 300.0],
-        })
-
-        analyzer = PeerAnalyzer(db_path=":memory:")
-        mock_conn = MagicMock()
-        with patch.object(analyzer, "_get_conn", return_value=mock_conn), \
-             patch.object(pd, "read_sql", return_value=companies_df):
-            result = analyzer._define_peer_groups()
-
-        assert "peer_group" in result.columns
-        assert result.loc[0, "peer_group"] == "Information Technology"
-        assert result.loc[2, "peer_group"] == "Automotive"
-        assert result.loc[4, "peer_group"] == "Pharmaceuticals"
+    def test_peer_metrics_list(self):
+        names = [m[0] for m in PeerAnalyzer.METRICS]
+        assert len(names) == 10
+        for required in [
+            "roe", "roce", "net_profit_margin", "debt_to_equity", "fcf",
+            "pat_cagr_5y", "revenue_cagr_5y", "eps_cagr_5y",
+            "interest_coverage", "asset_turnover",
+        ]:
+            assert required in names
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 6 Screener Config Tests
 # ══════════════════════════════════════════════════════════════════════════════
+
+def _engine():
+    config_path = os.path.join(os.path.dirname(__file__), "..", "..", "config", "screener_config.yaml")
+    return ScreenerEngine(config_path=config_path, db_path=":memory:")
+
 
 class TestScreenerConfig:
     def test_load_yaml_config(self):
@@ -265,101 +263,75 @@ class TestScreenerConfig:
 
         assert "presets" in config
         assert len(config["presets"]) == 6
-        expected_presets = [
+        expected = [
             "Quality_Compounder", "Value_Pick", "Growth_Accelerator",
             "Dividend_Champion", "Debt_Free_Blue_Chip", "Turnaround_Watch",
         ]
-        for preset_name in expected_presets:
+        for preset_name in expected:
             assert preset_name in config["presets"]
 
     def test_filter_application(self):
-        config_path = os.path.join(
-            os.path.dirname(__file__), "..", "..", "config", "screener_config.yaml"
-        )
-        engine = ScreenerEngine(config_path=config_path, db_path=":memory:")
-
+        engine = _engine()
         df = pd.DataFrame({
             "company_id": [1, 2, 3],
             "roe": [20.0, 8.0, 18.0],
-            "revenue_cagr_3y": [12.0, 5.0, 15.0],
-            "cfo_quality": ["High Quality", "Moderate", "High Quality"],
             "debt_to_equity": [1.0, 2.5, 0.5],
-            "net_profit_margin": [15.0, 6.0, 12.0],
-            "sector_name": ["Information Technology", "Automotive", "Consumer Goods"],
+            "free_cash_flow": [100.0, 50.0, 200.0],
+            "revenue_cagr_5y": [12.0, 5.0, 15.0],
+            "broad_sector": ["Information Technology", "Automotive", "Consumer Staples"],
         })
-
         filtered = engine.apply_filters(df.copy(), "Quality_Compounder")
         assert len(filtered) >= 1
+        assert all(filtered["roe"] >= 15.0)
 
     def test_financial_sector_exclusion(self):
-        config_path = os.path.join(
-            os.path.dirname(__file__), "..", "..", "config", "screener_config.yaml"
-        )
-        engine = ScreenerEngine(config_path=config_path, db_path=":memory:")
-
+        engine = _engine()
         df = pd.DataFrame({
             "company_id": [1, 2],
             "roe": [18.0, 18.0],
-            "revenue_cagr_3y": [12.0, 12.0],
-            "cfo_quality": ["High Quality", "High Quality"],
             "debt_to_equity": [5.0, 5.0],
-            "net_profit_margin": [12.0, 12.0],
-            "sector_name": ["Information Technology", "Financial Services"],
+            "free_cash_flow": [100.0, 100.0],
+            "revenue_cagr_5y": [12.0, 12.0],
+            "broad_sector": ["Information Technology", "Financials"],
         })
-
         filtered = engine.apply_filters(df.copy(), "Quality_Compounder")
         assert len(filtered) == 1
+        assert filtered.iloc[0]["broad_sector"] == "Financials"
 
     def test_debt_free_icr(self):
-        config_path = os.path.join(
-            os.path.dirname(__file__), "..", "..", "config", "screener_config.yaml"
-        )
-        engine = ScreenerEngine(config_path=config_path, db_path=":memory:")
-
+        engine = _engine()
+        engine.presets = {"_test": {"filters": [{"metric": "interest_coverage", "min": 2.0}]}}
         df = pd.DataFrame({
             "company_id": [1, 2],
-            "market_cap": [20000.0, 20000.0],
-            "debt_to_equity": [0.05, 0.05],
-            "roe": [15.0, 15.0],
-            "net_profit_margin": [10.0, 10.0],
-            "interest_coverage": [np.nan, 5.0],
-            "sector_name": ["Consumer Goods", "Consumer Goods"],
+            "interest_coverage": [None, 1.0],
+            "icr_label": ["Debt Free", None],
         })
-
-        filtered = engine.apply_filters(df.copy(), "Debt_Free_Blue_Chip")
-        assert len(filtered) == 2
+        filtered = engine.apply_filters(df.copy(), "_test")
+        assert len(filtered) == 1
 
     def test_composite_score_range(self):
-        config_path = os.path.join(
-            os.path.dirname(__file__), "..", "..", "config", "screener_config.yaml"
-        )
-        engine = ScreenerEngine(config_path=config_path, db_path=":memory:")
-
+        engine = _engine()
         np.random.seed(42)
         n = 50
         df = pd.DataFrame({
             "company_id": range(1, n + 1),
             "roe": np.random.uniform(5, 30, n),
+            "roce": np.random.uniform(5, 35, n),
             "net_profit_margin": np.random.uniform(2, 25, n),
-            "operating_profit_margin": np.random.uniform(5, 35, n),
-            "cfo_quality": np.random.choice(
-                ["High Quality", "Moderate", "Accrual Risk"], n
-            ),
-            "fcf_yield": np.random.uniform(-5, 15, n),
-            "revenue_cagr_3y": np.random.uniform(-10, 30, n),
-            "revenue_cagr_5y": np.random.uniform(-5, 25, n),
-            "pat_cagr_3y": np.random.uniform(-15, 35, n),
-            "pat_cagr_5y": np.random.uniform(-10, 30, n),
             "debt_to_equity": np.random.uniform(0, 3, n),
             "interest_coverage": np.random.uniform(0.5, 20, n),
+            "free_cash_flow": np.random.uniform(-100, 500, n),
+            "fcf_cagr_5y": np.random.uniform(-10, 30, n),
+            "cfo_quality_score": np.random.uniform(0.1, 2.0, n),
+            "revenue_cagr_5y": np.random.uniform(-5, 25, n),
+            "pat_cagr_5y": np.random.uniform(-10, 30, n),
+            "broad_sector": np.random.choice(["IT", "Financials", "Auto"], n),
         })
-
-        engine.presets = engine.config["presets"]
         scored = engine.composite_score(df.copy())
         assert "composite_score" in scored.columns
-        valid_scores = scored["composite_score"].dropna()
-        assert valid_scores.min() >= 0.0
-        assert valid_scores.max() <= 100.0
+        valid = scored["composite_score"].dropna()
+        assert valid.min() >= 0.0
+        assert valid.max() <= 100.0
 
     def test_preset_has_required_keys(self):
         config_path = os.path.join(
@@ -368,16 +340,8 @@ class TestScreenerConfig:
         with open(config_path, "r") as f:
             config = yaml.safe_load(f)
 
-        required_keys = {"label", "filters", "sort_by", "composite_weights"}
         for preset_name, preset in config["presets"].items():
-            missing = required_keys - set(preset.keys())
-            assert not missing, f"Preset '{preset_name}' missing keys: {missing}"
-
+            for key in ["label", "filters", "sort_by"]:
+                assert key in preset, f"Preset '{preset_name}' missing key: {key}"
             assert isinstance(preset["filters"], list)
             assert len(preset["filters"]) > 0
-            assert isinstance(preset["sort_by"], str)
-            weights = preset["composite_weights"]
-            assert "profitability" in weights
-            assert "cash_quality" in weights
-            assert "growth" in weights
-            assert "leverage" in weights

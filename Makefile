@@ -30,6 +30,9 @@ radar:
 dashboard:
 	streamlit run src/dashboard/app.py --server.port 8501
 
+valuation:
+	python -m src.analytics.valuation
+
 # ── Sprint 5: NLP & Reports ─────────────────────────────────────
 reports:
 	python -m src.reports.generate

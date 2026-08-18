@@ -1,21 +1,6 @@
-"""NLP text analysis module — keyword extraction, sentiment, readability, summaries."""
+"""NLP module — analysis parser and auto pros/cons generator (Sprint 5)."""
 
-from .analyzer import (
-    analyze_company_sentiment,
-    analyze_sentiment,
-    compute_readability,
-    export_nlp_summary,
-    extract_company_keywords,
-    extract_keywords,
-    generate_company_summary,
-)
+from .parser import parse_analysis, parse_text, crosscheck_cagr
+from .pros_cons_generator import ProsConsGenerator
 
-__all__ = [
-    "extract_keywords",
-    "extract_company_keywords",
-    "analyze_sentiment",
-    "analyze_company_sentiment",
-    "compute_readability",
-    "generate_company_summary",
-    "export_nlp_summary",
-]
+__all__ = ["parse_analysis", "parse_text", "crosscheck_cagr", "ProsConsGenerator"]

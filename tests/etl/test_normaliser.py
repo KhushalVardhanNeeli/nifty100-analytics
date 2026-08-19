@@ -1,30 +1,30 @@
-import math
 import os
 import sys
 import tempfile
 from unittest.mock import MagicMock
 
-import numpy as np
 import pandas as pd
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from src.etl.normaliser import (
-    normalize_ticker,
-    normalize_year,
     normalize_numeric,
     normalize_sector_name,
+    normalize_ticker,
+    normalize_year,
 )
 from src.etl.validator import DQValidator
 
-
 # ── Helper ────────────────────────────────────────────────────────────────────
+
 
 def _mkv(query_results):
     v = DQValidator.__new__(DQValidator)
     v.engine = MagicMock()
-    v._query = MagicMock(side_effect=list(query_results) if not callable(query_results) else query_results)
+    v._query = MagicMock(
+        side_effect=(list(query_results) if not callable(query_results) else query_results)
+    )
     return v
 
 
@@ -35,6 +35,7 @@ def _empty_df():
 # ══════════════════════════════════════════════════════════════════════════════
 # normalize_ticker — 15 tests
 # ══════════════════════════════════════════════════════════════════════════════
+
 
 class TestNormalizeTicker:
     def test_lowercase_upper(self):
@@ -86,6 +87,7 @@ class TestNormalizeTicker:
 # ══════════════════════════════════════════════════════════════════════════════
 # normalize_year — 21 tests
 # ══════════════════════════════════════════════════════════════════════════════
+
 
 class TestNormalizeYear:
     def test_int_2020(self):
@@ -156,6 +158,7 @@ class TestNormalizeYear:
 # normalize_numeric — 10 tests
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 class TestNormalizeNumeric:
     def test_plain(self):
         assert normalize_numeric("1000") == 1000.0
@@ -192,6 +195,7 @@ class TestNormalizeNumeric:
 # normalize_sector_name — 3 tests
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 class TestNormalizeSectorName:
     def test_it(self):
         assert normalize_sector_name("it") == "Information Technology"
@@ -206,6 +210,7 @@ class TestNormalizeSectorName:
 # ══════════════════════════════════════════════════════════════════════════════
 # DQValidator — 17 tests (16 rules + export)
 # ══════════════════════════════════════════════════════════════════════════════
+
 
 class TestDQValidator:
     def test_dq01_pk_uniqueness(self):
@@ -252,10 +257,15 @@ class TestDQValidator:
         assert any("FK violation" in f["issue"] for f in failures)
 
     def test_dq04_bs_balance(self):
-        imbalanced = pd.DataFrame({
-            "bs_id": [1], "company_id": [10], "year": [2022],
-            "total_assets": [1000.0], "total_liabilities": [600.0],
-        })
+        imbalanced = pd.DataFrame(
+            {
+                "bs_id": [1],
+                "company_id": [10],
+                "year": [2022],
+                "total_assets": [1000.0],
+                "total_liabilities": [600.0],
+            }
+        )
         v = _mkv([imbalanced])
         failures = v.dq04_bs_balance()
         assert failures
@@ -263,10 +273,16 @@ class TestDQValidator:
         assert "BS imbalance" in failures[0]["issue"]
 
     def test_dq05_opm_cross_check(self):
-        mismatch = pd.DataFrame({
-            "pnl_id": [1], "company_id": [10], "year": [2022],
-            "opm_percentage": [13.53], "operating_profit": [305.8], "sales": [1000.0],
-        })
+        mismatch = pd.DataFrame(
+            {
+                "pnl_id": [1],
+                "company_id": [10],
+                "year": [2022],
+                "opm_percentage": [13.53],
+                "operating_profit": [305.8],
+                "sales": [1000.0],
+            }
+        )
         v = _mkv([mismatch])
         failures = v.dq05_opm_cross_check()
         assert failures
@@ -281,25 +297,45 @@ class TestDQValidator:
         assert "Non-positive sales" in failures[0]["issue"]
 
     def test_dq07_net_cash(self):
-        missing = pd.DataFrame({
-            "cf_id": [1], "company_id": [10], "year": [2022],
-            "operating_activity": [100.0], "investing_activity": [-50.0],
-            "financing_activity": [-20.0], "net_cash_flow": [None],
-        })
+        missing = pd.DataFrame(
+            {
+                "cf_id": [1],
+                "company_id": [10],
+                "year": [2022],
+                "operating_activity": [100.0],
+                "investing_activity": [-50.0],
+                "financing_activity": [-20.0],
+                "net_cash_flow": [None],
+            }
+        )
         v = _mkv([missing])
         failures = v.dq07_net_cash()
         assert failures
         assert "net_cash_flow missing" in failures[0]["issue"]
 
     def test_dq08_tax_rate(self):
-        bad = pd.DataFrame({"pnl_id": [1], "company_id": [10], "year": [2022], "tax_percentage": [250.0]})
+        bad = pd.DataFrame(
+            {
+                "pnl_id": [1],
+                "company_id": [10],
+                "year": [2022],
+                "tax_percentage": [250.0],
+            }
+        )
         v = _mkv([bad])
         failures = v.dq08_tax_rate()
         assert failures
         assert "Tax rate out of" in failures[0]["issue"]
 
     def test_dq09_dividend_cap(self):
-        high = pd.DataFrame({"pnl_id": [1], "company_id": [10], "year": [2022], "dividend_payout": [350.0]})
+        high = pd.DataFrame(
+            {
+                "pnl_id": [1],
+                "company_id": [10],
+                "year": [2022],
+                "dividend_payout": [350.0],
+            }
+        )
         v = _mkv([high])
         failures = v.dq09_dividend_cap()
         assert failures
@@ -313,22 +349,33 @@ class TestDQValidator:
         assert "Invalid website URL" in failures[0]["issue"]
 
     def test_dq11_eps_sign(self):
-        bad = pd.DataFrame({
-            "pnl_id": [1], "company_id": [10], "year": [2022],
-            "eps": [10.0], "net_profit": [-500.0],
-        })
+        bad = pd.DataFrame(
+            {
+                "pnl_id": [1],
+                "company_id": [10],
+                "year": [2022],
+                "eps": [10.0],
+                "net_profit": [-500.0],
+            }
+        )
         v = _mkv([bad])
         failures = v.dq11_eps_sign()
         assert failures
         assert "EPS sign mismatch" in failures[0]["issue"]
 
     def test_dq12_bs_equity_balance(self):
-        bad = pd.DataFrame({
-            "bs_id": [1], "company_id": [10], "year": [2022],
-            "equity_capital": [100.0], "reserves": [50.0],
-            "borrowings": [20.0], "other_liabilities": [10.0],
-            "total_liabilities": [1000.0],
-        })
+        bad = pd.DataFrame(
+            {
+                "bs_id": [1],
+                "company_id": [10],
+                "year": [2022],
+                "equity_capital": [100.0],
+                "reserves": [50.0],
+                "borrowings": [20.0],
+                "other_liabilities": [10.0],
+                "total_liabilities": [1000.0],
+            }
+        )
         v = _mkv([bad])
         failures = v.dq12_bs_equity_balance()
         assert failures
@@ -371,10 +418,17 @@ class TestDQValidator:
         assert "Non-positive market cap" in failures[0]["issue"]
 
     def test_export_failures(self):
-        failures = [{
-            "rule": "DQ-01", "severity": "CRITICAL", "table": "companies",
-            "field": "company_id", "company_id": 1, "year": 2022, "issue": "Duplicate PK",
-        }]
+        failures = [
+            {
+                "rule": "DQ-01",
+                "severity": "CRITICAL",
+                "table": "companies",
+                "field": "company_id",
+                "company_id": 1,
+                "year": 2022,
+                "issue": "Duplicate PK",
+            }
+        ]
         v = DQValidator.__new__(DQValidator)
         v.engine = MagicMock()
         with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as tmp:

@@ -2,7 +2,7 @@ import os
 import sys
 import tempfile
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 import pandas as pd
@@ -11,8 +11,8 @@ import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from src.etl.validator import DQValidator
 from src.analytics.peer import PeerAnalyzer
+from src.etl.validator import DQValidator
 from src.screener.engine import ScreenerEngine
 
 
@@ -34,31 +34,53 @@ def _mkv(query_results):
 # 6 Validator Integration Tests
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 class TestValidatorIntegration:
     def test_full_validation_run(self):
         v = DQValidator.__new__(DQValidator)
         v.engine = MagicMock()
         v._query = MagicMock()
 
-        v.dq01_pk_uniqueness = MagicMock(return_value=[
-            {"table": "companies", "company_id": 1, "year": None,
-             "rule": "DQ-01", "severity": "CRITICAL",
-             "message": "Duplicate PK"}
-        ])
+        v.dq01_pk_uniqueness = MagicMock(
+            return_value=[
+                {
+                    "table": "companies",
+                    "company_id": 1,
+                    "year": None,
+                    "rule": "DQ-01",
+                    "severity": "CRITICAL",
+                    "message": "Duplicate PK",
+                }
+            ]
+        )
         v.dq02_composite_uniqueness = MagicMock(return_value=[])
-        v.dq03_fk_integrity = MagicMock(return_value=[
-            {"table": "profitandloss", "company_id": 99, "year": None,
-             "rule": "DQ-03", "severity": "CRITICAL",
-             "message": "FK violation"}
-        ])
+        v.dq03_fk_integrity = MagicMock(
+            return_value=[
+                {
+                    "table": "profitandloss",
+                    "company_id": 99,
+                    "year": None,
+                    "rule": "DQ-03",
+                    "severity": "CRITICAL",
+                    "message": "FK violation",
+                }
+            ]
+        )
         v.dq04_bs_balance = MagicMock(return_value=[])
         v.dq05_opm_cross_check = MagicMock(return_value=[])
         v.dq06_positive_sales = MagicMock(return_value=[])
-        v.dq07_net_cash = MagicMock(return_value=[
-            {"table": "balancesheet", "company_id": 5, "year": 2022,
-             "rule": "DQ-07", "severity": "WARNING",
-             "message": "Negative cash"}
-        ])
+        v.dq07_net_cash = MagicMock(
+            return_value=[
+                {
+                    "table": "balancesheet",
+                    "company_id": 5,
+                    "year": 2022,
+                    "rule": "DQ-07",
+                    "severity": "WARNING",
+                    "message": "Negative cash",
+                }
+            ]
+        )
         v.dq08_tax_rate = MagicMock(return_value=[])
         v.dq09_dividend_cap = MagicMock(return_value=[])
         v.dq10_valid_urls = MagicMock(return_value=[])
@@ -81,21 +103,35 @@ class TestValidatorIntegration:
         v.engine = MagicMock()
         v._query = MagicMock()
 
-        v.dq01_pk_uniqueness = MagicMock(return_value=[
-            {"table": "companies", "company_id": None, "year": None,
-             "rule": "DQ-01", "severity": "CRITICAL",
-             "message": "Duplicate PK"}
-        ])
+        v.dq01_pk_uniqueness = MagicMock(
+            return_value=[
+                {
+                    "table": "companies",
+                    "company_id": None,
+                    "year": None,
+                    "rule": "DQ-01",
+                    "severity": "CRITICAL",
+                    "message": "Duplicate PK",
+                }
+            ]
+        )
         v.dq02_composite_uniqueness = MagicMock(return_value=[])
         v.dq03_fk_integrity = MagicMock(return_value=[])
         v.dq04_bs_balance = MagicMock(return_value=[])
         v.dq05_opm_cross_check = MagicMock(return_value=[])
         v.dq06_positive_sales = MagicMock(return_value=[])
-        v.dq07_net_cash = MagicMock(return_value=[
-            {"table": "balancesheet", "company_id": 1, "year": 2022,
-             "rule": "DQ-07", "severity": "WARNING",
-             "message": "Negative cash"}
-        ])
+        v.dq07_net_cash = MagicMock(
+            return_value=[
+                {
+                    "table": "balancesheet",
+                    "company_id": 1,
+                    "year": 2022,
+                    "rule": "DQ-07",
+                    "severity": "WARNING",
+                    "message": "Negative cash",
+                }
+            ]
+        )
         v.dq08_tax_rate = MagicMock(return_value=[])
         v.dq09_dividend_cap = MagicMock(return_value=[])
         v.dq10_valid_urls = MagicMock(return_value=[])
@@ -147,14 +183,15 @@ class TestValidatorIntegration:
             return dup_df
 
         v._query = MagicMock(side_effect=_respond)
-        failures = v.dq01_pk_uniqueness()
-        assert len(failures) >= 1
+        v.dq01_pk_uniqueness()
+        failures = [f for f in v.dq01_pk_uniqueness()]
+        assert failures
 
         clean_companies = pd.DataFrame({"pk": [1, 2, 3]})
         clean_empty = pd.DataFrame()
 
         def _respond_clean(sql, params=None):
-            if "FROM \"companies\"" in sql:
+            if 'FROM "companies"' in sql:
                 return clean_companies
             return clean_empty
 
@@ -164,25 +201,41 @@ class TestValidatorIntegration:
 
     def test_large_dataset_performance(self):
         n = 10000
-        large_df = pd.DataFrame({
-            "pnl_id": range(1, n + 1),
-            "company_id": np.random.randint(1, 101, n),
-            "year": np.random.randint(2015, 2023, n),
-            "sales": np.random.uniform(100, 1000000, n),
-        })
+        large_df = pd.DataFrame(
+            {
+                "pnl_id": range(1, n + 1),
+                "company_id": np.random.randint(1, 101, n),
+                "year": np.random.randint(2015, 2023, n),
+                "sales": np.random.uniform(100, 1000000, n),
+            }
+        )
 
         v = _mkv([large_df])
         start = time.time()
-        failures = v.dq06_positive_sales()
+        v.dq06_positive_sales()
         elapsed = time.time() - start
         assert elapsed < 2.0
 
     def test_failure_export_format(self):
         failures = [
-            {"company_id": 1, "field": "company_id", "issue": "Duplicate PK",
-             "severity": "CRITICAL", "rule": "DQ-01", "year": 2022, "table": "companies"},
-            {"company_id": 2, "field": "sales", "issue": "Non-positive sales: -500",
-             "severity": "CRITICAL", "rule": "DQ-06", "year": 2021, "table": "profitandloss"},
+            {
+                "company_id": 1,
+                "field": "company_id",
+                "issue": "Duplicate PK",
+                "severity": "CRITICAL",
+                "rule": "DQ-01",
+                "year": 2022,
+                "table": "companies",
+            },
+            {
+                "company_id": 2,
+                "field": "sales",
+                "issue": "Non-positive sales: -500",
+                "severity": "CRITICAL",
+                "rule": "DQ-06",
+                "year": 2021,
+                "table": "profitandloss",
+            },
         ]
 
         v = DQValidator.__new__(DQValidator)
@@ -205,11 +258,10 @@ class TestValidatorIntegration:
             os.unlink(tmp_path)
 
 
-
-
 # ══════════════════════════════════════════════════════════════════════════════
 # 3 Peer Metrics Tests
 # ══════════════════════════════════════════════════════════════════════════════
+
 
 class TestPeerMetrics:
     def test_percent_rank_calculation(self):
@@ -237,9 +289,16 @@ class TestPeerMetrics:
         names = [m[0] for m in PeerAnalyzer.METRICS]
         assert len(names) == 10
         for required in [
-            "roe", "roce", "net_profit_margin", "debt_to_equity", "fcf",
-            "pat_cagr_5y", "revenue_cagr_5y", "eps_cagr_5y",
-            "interest_coverage", "asset_turnover",
+            "roe",
+            "roce",
+            "net_profit_margin",
+            "debt_to_equity",
+            "fcf",
+            "pat_cagr_5y",
+            "revenue_cagr_5y",
+            "eps_cagr_5y",
+            "interest_coverage",
+            "asset_turnover",
         ]:
             assert required in names
 
@@ -248,8 +307,11 @@ class TestPeerMetrics:
 # 6 Screener Config Tests
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def _engine():
-    config_path = os.path.join(os.path.dirname(__file__), "..", "..", "config", "screener_config.yaml")
+    config_path = os.path.join(
+        os.path.dirname(__file__), "..", "..", "config", "screener_config.yaml"
+    )
     return ScreenerEngine(config_path=config_path, db_path=":memory:")
 
 
@@ -264,36 +326,48 @@ class TestScreenerConfig:
         assert "presets" in config
         assert len(config["presets"]) == 6
         expected = [
-            "Quality_Compounder", "Value_Pick", "Growth_Accelerator",
-            "Dividend_Champion", "Debt_Free_Blue_Chip", "Turnaround_Watch",
+            "Quality_Compounder",
+            "Value_Pick",
+            "Growth_Accelerator",
+            "Dividend_Champion",
+            "Debt_Free_Blue_Chip",
+            "Turnaround_Watch",
         ]
         for preset_name in expected:
             assert preset_name in config["presets"]
 
     def test_filter_application(self):
         engine = _engine()
-        df = pd.DataFrame({
-            "company_id": [1, 2, 3],
-            "roe": [20.0, 8.0, 18.0],
-            "debt_to_equity": [1.0, 2.5, 0.5],
-            "free_cash_flow": [100.0, 50.0, 200.0],
-            "revenue_cagr_5y": [12.0, 5.0, 15.0],
-            "broad_sector": ["Information Technology", "Automotive", "Consumer Staples"],
-        })
+        df = pd.DataFrame(
+            {
+                "company_id": [1, 2, 3],
+                "roe": [20.0, 8.0, 18.0],
+                "debt_to_equity": [1.0, 2.5, 0.5],
+                "free_cash_flow": [100.0, 50.0, 200.0],
+                "revenue_cagr_5y": [12.0, 5.0, 15.0],
+                "broad_sector": [
+                    "Information Technology",
+                    "Automotive",
+                    "Consumer Staples",
+                ],
+            }
+        )
         filtered = engine.apply_filters(df.copy(), "Quality_Compounder")
         assert len(filtered) >= 1
         assert all(filtered["roe"] >= 15.0)
 
     def test_financial_sector_exclusion(self):
         engine = _engine()
-        df = pd.DataFrame({
-            "company_id": [1, 2],
-            "roe": [18.0, 18.0],
-            "debt_to_equity": [5.0, 5.0],
-            "free_cash_flow": [100.0, 100.0],
-            "revenue_cagr_5y": [12.0, 12.0],
-            "broad_sector": ["Information Technology", "Financials"],
-        })
+        df = pd.DataFrame(
+            {
+                "company_id": [1, 2],
+                "roe": [18.0, 18.0],
+                "debt_to_equity": [5.0, 5.0],
+                "free_cash_flow": [100.0, 100.0],
+                "revenue_cagr_5y": [12.0, 12.0],
+                "broad_sector": ["Information Technology", "Financials"],
+            }
+        )
         filtered = engine.apply_filters(df.copy(), "Quality_Compounder")
         assert len(filtered) == 1
         assert filtered.iloc[0]["broad_sector"] == "Financials"
@@ -301,11 +375,13 @@ class TestScreenerConfig:
     def test_debt_free_icr(self):
         engine = _engine()
         engine.presets = {"_test": {"filters": [{"metric": "interest_coverage", "min": 2.0}]}}
-        df = pd.DataFrame({
-            "company_id": [1, 2],
-            "interest_coverage": [None, 1.0],
-            "icr_label": ["Debt Free", None],
-        })
+        df = pd.DataFrame(
+            {
+                "company_id": [1, 2],
+                "interest_coverage": [None, 1.0],
+                "icr_label": ["Debt Free", None],
+            }
+        )
         filtered = engine.apply_filters(df.copy(), "_test")
         assert len(filtered) == 1
 
@@ -313,20 +389,22 @@ class TestScreenerConfig:
         engine = _engine()
         np.random.seed(42)
         n = 50
-        df = pd.DataFrame({
-            "company_id": range(1, n + 1),
-            "roe": np.random.uniform(5, 30, n),
-            "roce": np.random.uniform(5, 35, n),
-            "net_profit_margin": np.random.uniform(2, 25, n),
-            "debt_to_equity": np.random.uniform(0, 3, n),
-            "interest_coverage": np.random.uniform(0.5, 20, n),
-            "free_cash_flow": np.random.uniform(-100, 500, n),
-            "fcf_cagr_5y": np.random.uniform(-10, 30, n),
-            "cfo_quality_score": np.random.uniform(0.1, 2.0, n),
-            "revenue_cagr_5y": np.random.uniform(-5, 25, n),
-            "pat_cagr_5y": np.random.uniform(-10, 30, n),
-            "broad_sector": np.random.choice(["IT", "Financials", "Auto"], n),
-        })
+        df = pd.DataFrame(
+            {
+                "company_id": range(1, n + 1),
+                "roe": np.random.uniform(5, 30, n),
+                "roce": np.random.uniform(5, 35, n),
+                "net_profit_margin": np.random.uniform(2, 25, n),
+                "debt_to_equity": np.random.uniform(0, 3, n),
+                "interest_coverage": np.random.uniform(0.5, 20, n),
+                "free_cash_flow": np.random.uniform(-100, 500, n),
+                "fcf_cagr_5y": np.random.uniform(-10, 30, n),
+                "cfo_quality_score": np.random.uniform(0.1, 2.0, n),
+                "revenue_cagr_5y": np.random.uniform(-5, 25, n),
+                "pat_cagr_5y": np.random.uniform(-10, 30, n),
+                "broad_sector": np.random.choice(["IT", "Financials", "Auto"], n),
+            }
+        )
         scored = engine.composite_score(df.copy())
         assert "composite_score" in scored.columns
         valid = scored["composite_score"].dropna()

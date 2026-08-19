@@ -1,40 +1,37 @@
-import math
-import sys
 import os
+import sys
 
-import numpy as np
-import pandas as pd
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
+from src.analytics.cagr import compute_cagr
+from src.analytics.cashflow_kpis import (
+    capex_intensity_label,
+    capex_intensity_pct,
+    cfo_quality_label,
+    classify_allocation,
+    fcf_conversion_pct,
+    free_cash_flow,
+)
 from src.analytics.ratios import (
-    net_profit_margin,
-    operating_profit_margin,
-    return_on_equity,
-    return_on_capital_employed,
-    return_on_assets,
+    asset_turnover,
+    book_value_per_share,
     debt_to_equity,
     interest_coverage_ratio,
     net_debt,
-    asset_turnover,
-    book_value_per_share,
+    net_profit_margin,
+    operating_profit_margin,
     opm_cross_check,
+    return_on_assets,
+    return_on_capital_employed,
+    return_on_equity,
 )
-from src.analytics.cagr import compute_cagr
-from src.analytics.cashflow_kpis import (
-    free_cash_flow,
-    cfo_quality_label,
-    capex_intensity_pct,
-    capex_intensity_label,
-    fcf_conversion_pct,
-    classify_allocation,
-)
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Profitability ratios
 # ══════════════════════════════════════════════════════════════════════════════
+
 
 class TestNetProfitMargin:
     def test_normal(self):
@@ -85,6 +82,7 @@ class TestReturnOnAssets:
 # ══════════════════════════════════════════════════════════════════════════════
 # Leverage & efficiency
 # ══════════════════════════════════════════════════════════════════════════════
+
 
 class TestDebtToEquity:
     def test_normal(self):
@@ -140,6 +138,7 @@ class TestOpmCrossCheck:
 # CAGR edge cases
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 class TestCAGR:
     def test_normal_positive(self):
         value, flag = compute_cagr(100, 121, 2)
@@ -175,6 +174,7 @@ class TestCAGR:
 # ══════════════════════════════════════════════════════════════════════════════
 # Cash flow KPIs
 # ══════════════════════════════════════════════════════════════════════════════
+
 
 class TestFreeCashFlow:
     def test_fcf(self):

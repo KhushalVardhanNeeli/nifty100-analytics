@@ -8,7 +8,6 @@ populates the `peer_percentiles` table, and exports a colour-coded
 import sqlite3
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -44,21 +43,21 @@ class PeerAnalyzer:
         conn = self._conn()
         try:
             groups = pd.read_sql(
-                "SELECT company_id, peer_group_name, is_benchmark FROM peer_groups", conn)
-            companies = pd.read_sql(
-                "SELECT company_id, ticker FROM companies", conn)
+                "SELECT company_id, peer_group_name, is_benchmark FROM peer_groups",
+                conn,
+            )
             if year is None:
-                year = int(pd.read_sql("SELECT MAX(year) AS y FROM financial_ratios", conn).iloc[0]["y"])
+                year = int(
+                    pd.read_sql("SELECT MAX(year) AS y FROM financial_ratios", conn).iloc[0]["y"]
+                )
 
             fr = pd.read_sql("SELECT * FROM financial_ratios WHERE year = ?", conn, params=[year])
 
-            col_map = {src: name for name, src, _ in METRICS}
             fr_renamed = fr.rename(columns={src: name for name, src, _ in METRICS})
 
             rows = []
             if not fr_renamed.empty:
-                merged = fr_renamed.merge(
-                    groups, on="company_id", how="left")
+                merged = fr_renamed.merge(groups, on="company_id", how="left")
                 for group_name, grp in merged.groupby("peer_group_name"):
                     for name, _, invert in METRICS:
                         if name not in grp.columns:
@@ -66,19 +65,21 @@ class PeerAnalyzer:
                         vals = grp[name].dropna()
                         if vals.empty or len(vals) < 2:
                             continue
-                        pct = (vals.rank(pct=True) * 100)
+                        pct = vals.rank(pct=True) * 100
                         if invert:
                             pct = 100 - pct
                         pct_map = dict(zip(grp["company_id"], pct))
                         for _, r in grp.iterrows():
-                            rows.append({
-                                "company_id": int(r["company_id"]),
-                                "year": int(year),
-                                "metric": name,
-                                "value": r[name],
-                                "percentile_rank": pct_map.get(r["company_id"]),
-                                "peer_group": group_name,
-                            })
+                            rows.append(
+                                {
+                                    "company_id": int(r["company_id"]),
+                                    "year": int(year),
+                                    "metric": name,
+                                    "value": r[name],
+                                    "percentile_rank": pct_map.get(r["company_id"]),
+                                    "peer_group": group_name,
+                                }
+                            )
 
             if rows:
                 conn.execute("DELETE FROM peer_percentiles")
@@ -111,7 +112,10 @@ class PeerAnalyzer:
         conn = self._conn()
         try:
             benchmarks = set(
-                pd.read_sql("SELECT company_id FROM peer_groups WHERE is_benchmark = 1", conn)["company_id"])
+                pd.read_sql("SELECT company_id FROM peer_groups WHERE is_benchmark = 1", conn)[
+                    "company_id"
+                ]
+            )
         finally:
             conn.close()
 
@@ -132,13 +136,18 @@ class PeerAnalyzer:
             sheet = group_name[:31]
             ws = wb.create_sheet(title=sheet)
 
-            pivot = grp.pivot_table(index=["company_id", "ticker", "company_name"],
-                                    columns="metric", values="percentile_rank")
-            values_pivot = grp.pivot_table(index=["company_id", "ticker", "company_name"],
-                                           columns="metric", values="value")
+            pivot = grp.pivot_table(
+                index=["company_id", "ticker", "company_name"],
+                columns="metric",
+                values="percentile_rank",
+            )
+            values_pivot = grp.pivot_table(
+                index=["company_id", "ticker", "company_name"],
+                columns="metric",
+                values="value",
+            )
 
-            headers = ["company_id", "company_name"] + \
-                [f"{m} (pct)" for m, _, _ in METRICS]
+            headers = ["company_id", "company_name"] + [f"{m} (pct)" for m, _, _ in METRICS]
             for cidx, h in enumerate(headers, 1):
                 cell = ws.cell(row=1, column=cidx, value=h)
                 cell.fill = header_fill
@@ -154,8 +163,11 @@ class PeerAnalyzer:
                 ws.cell(row=row_num, column=2, value=idx[2]).border = thin
                 for m_idx, (name, _, invert) in enumerate(METRICS, 3):
                     pct = pct_row.get(name)
-                    cell = ws.cell(row=row_num, column=m_idx,
-                                   value=round(pct, 1) if pd.notna(pct) else None)
+                    cell = ws.cell(
+                        row=row_num,
+                        column=m_idx,
+                        value=round(pct, 1) if pd.notna(pct) else None,
+                    )
                     cell.alignment = Alignment(horizontal="center")
                     cell.border = thin
                     if is_bm:
@@ -177,10 +189,15 @@ class PeerAnalyzer:
             ws.cell(row=row_num, column=1).font = Font(bold=True, italic=True)
             ws.cell(row=row_num, column=2).fill = median_fill
             for m_idx, (name, _, _) in enumerate(METRICS, 3):
-                vals = values_pivot[name].dropna() if name in values_pivot else pd.Series(dtype=float)
+                vals = (
+                    values_pivot[name].dropna() if name in values_pivot else pd.Series(dtype=float)
+                )
                 med = vals.median() if not vals.empty else None
-                cell = ws.cell(row=row_num, column=m_idx,
-                               value=round(med, 2) if pd.notna(med) else None)
+                cell = ws.cell(
+                    row=row_num,
+                    column=m_idx,
+                    value=round(med, 2) if pd.notna(med) else None,
+                )
                 cell.fill = median_fill
                 cell.font = Font(bold=True, italic=True)
                 cell.border = thin

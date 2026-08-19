@@ -10,6 +10,7 @@ import sqlite3
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -44,11 +45,14 @@ def _load_composite(db_path: str) -> dict:
     if db_path in _composite_cache:
         return _composite_cache[db_path]
     from src.screener.engine import ScreenerEngine
+
     eng = ScreenerEngine(db_path=db_path)
     df = eng.load_data()
     df = eng.composite_score(df)
-    result = {int(k): (None if pd.isna(v) else float(v))
-              for k, v in zip(df["company_id"], df["composite_score"])}
+    result = {
+        int(k): (None if pd.isna(v) else float(v))
+        for k, v in zip(df["company_id"], df["composite_score"])
+    }
     _composite_cache[db_path] = result
     return result
 
@@ -59,13 +63,15 @@ def _load_latest(db_path: str):
     fr = pd.read_sql("SELECT * FROM financial_ratios WHERE year = ?", conn, params=[year])
     groups = pd.read_sql("SELECT company_id, peer_group_name FROM peer_groups", conn)
     companies = pd.read_sql(
-        "SELECT company_id, ticker, company_name, broad_sector FROM companies", conn)
+        "SELECT company_id, ticker, company_name, broad_sector FROM companies", conn
+    )
     conn.close()
     return year, fr, groups, companies
 
 
-def generate_radar(company_id: int, year: int, db_path: str,
-                   output_dir="reports/radar_charts/") -> str:
+def generate_radar(
+    company_id: int, year: int, db_path: str, output_dir="reports/radar_charts/"
+) -> str:
     year, fr, groups, companies = _load_latest(db_path)
     comp = companies[companies["company_id"] == company_id]
     if comp.empty or fr.empty:
@@ -123,7 +129,12 @@ def generate_radar(company_id: int, year: int, db_path: str,
     ax.set_ylim(0, 100)
     ax.set_yticks([20, 40, 60, 80, 100])
     ax.set_yticklabels(["20", "40", "60", "80", "100"], fontsize=8, color="gray")
-    plt.title(f"{ticker} - {year} vs {group_name} average", fontsize=14, fontweight="bold", pad=20)
+    plt.title(
+        f"{ticker} - {year} vs {group_name} average",
+        fontsize=14,
+        fontweight="bold",
+        pad=20,
+    )
     plt.legend(loc="lower right", bbox_to_anchor=(1.15, -0.05))
 
     out = out_dir / f"{ticker}_{year}_radar.png"
@@ -141,7 +152,11 @@ def _standalone_chart(ticker, company_id, fr, composite_map, out_dir, year) -> s
     vals = [comp_score if pd.notna(comp_score) else 0, avg if pd.notna(avg) else 0]
     bars = ax.bar(labels, vals, color=["#1f77b4", "gray"])
     ax.set_ylabel("Composite Quality Score")
-    ax.set_title(f"{ticker} - Composite Score vs Nifty 100 Average ({year})", fontsize=13, fontweight="bold")
+    ax.set_title(
+        f"{ticker} - Composite Score vs Nifty 100 Average ({year})",
+        fontsize=13,
+        fontweight="bold",
+    )
     ax.set_ylim(0, 100)
     for b, v in zip(bars, vals):
         ax.text(b.get_x() + b.get_width() / 2, v + 1, f"{v:.1f}", ha="center")

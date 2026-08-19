@@ -11,7 +11,6 @@ Edge cases (per spec):
 
 import os
 from pathlib import Path
-from typing import Optional, Tuple
 
 import pandas as pd
 from sqlalchemy import create_engine, text
@@ -23,7 +22,7 @@ WINDOWS = (3, 5, 10)
 METRICS = ("revenue", "pat", "eps")
 
 
-def compute_cagr(start_value: float, end_value: float, n: int) -> Tuple[Optional[float], Optional[str]]:
+def compute_cagr(start_value: float, end_value: float, n: int) -> tuple[float | None, str | None]:
     """Compute CAGR using ((end/start)^(1/n) - 1) * 100.
 
     Returns (value, flag). value is None for every edge case; flag names the case.
@@ -74,9 +73,12 @@ class CAGRCalculator:
 
     def company_series(self, company_id: int) -> dict:
         df = pd.read_sql_query(
-            text("SELECT year, sales, net_profit, eps FROM profitandloss "
-                 "WHERE company_id = :cid ORDER BY year ASC"),
-            self.engine, params={"cid": company_id},
+            text(
+                "SELECT year, sales, net_profit, eps FROM profitandloss "
+                "WHERE company_id = :cid ORDER BY year ASC"
+            ),
+            self.engine,
+            params={"cid": company_id},
         )
         return df
 
@@ -109,10 +111,15 @@ class CAGRCalculator:
                 windows = per_metric.get(metric, {})
                 for w in WINDOWS:
                     value, flag = windows.get(w, (None, "INSUFFICIENT"))
-                    rows.append({
-                        "company_id": cid, "metric": metric, "window": w,
-                        "value": value, "flag": flag,
-                    })
+                    rows.append(
+                        {
+                            "company_id": cid,
+                            "metric": metric,
+                            "window": w,
+                            "value": value,
+                            "flag": flag,
+                        }
+                    )
         return pd.DataFrame(rows)
 
 

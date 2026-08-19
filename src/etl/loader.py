@@ -40,17 +40,34 @@ RAW_HEADER_ROW = 1
 SUPP_HEADER_ROW = 0
 
 TABLES = [
-    "companies", "sectors", "profitandloss", "balancesheet", "cashflow",
-    "analysis", "documents", "prosandcons", "stock_prices",
-    "financial_ratios", "peer_groups", "market_cap",
+    "companies",
+    "sectors",
+    "profitandloss",
+    "balancesheet",
+    "cashflow",
+    "analysis",
+    "documents",
+    "prosandcons",
+    "stock_prices",
+    "financial_ratios",
+    "peer_groups",
+    "market_cap",
 ]
 
 # Drop order: children before parents so foreign-key constraints never break.
 DROP_ORDER = [
-    "profitandloss", "balancesheet", "cashflow", "stock_prices",
-    "analysis", "documents", "prosandcons", "financial_ratios",
-    "peer_groups", "market_cap",
-    "companies", "sectors",
+    "profitandloss",
+    "balancesheet",
+    "cashflow",
+    "stock_prices",
+    "analysis",
+    "documents",
+    "prosandcons",
+    "financial_ratios",
+    "peer_groups",
+    "market_cap",
+    "companies",
+    "sectors",
 ]
 
 
@@ -98,6 +115,7 @@ class ETLPipeline:
         # Use a raw sqlite3 connection with foreign_keys OFF so we can drop any
         # leftover tables (including older-schema tables) regardless of FK order.
         import sqlite3
+
         raw = sqlite3.connect(str(self.db_path))
         try:
             raw.execute("PRAGMA foreign_keys=OFF")
@@ -125,7 +143,9 @@ class ETLPipeline:
         if self._ticker_to_id:
             return self._ticker_to_id
         df = pd.read_sql("SELECT company_id, ticker FROM companies", self.engine)
-        self._ticker_to_id = {t: int(i) for t, i in zip(df["ticker"].str.upper().str.strip(), df["company_id"])}
+        self._ticker_to_id = {
+            t: int(i) for t, i in zip(df["ticker"].str.upper().str.strip(), df["company_id"])
+        }
         return self._ticker_to_id
 
     def _resolve(self, ticker):
@@ -148,27 +168,34 @@ class ETLPipeline:
             ticker = normalize_ticker(row.get("id"))
             if not ticker:
                 continue
-            records.append({
-                "ticker": ticker,
-                "company_name": str(row.get("company_name", "") or "").strip() or None,
-                "about_company": str(row.get("about_company", "") or "").strip() or None,
-                "website": str(row.get("website", "") or "").strip() or None,
-                "nse_symbol": str(row.get("nse_profile", "") or "").strip() or None,
-                "bse_code": str(row.get("bse_profile", "") or "").strip() or None,
-                "face_value": _f(row.get("face_value")),
-                "book_value": _f(row.get("book_value")),
-                "roe_percentage": _f(row.get("roe_percentage")),
-                "roce_percentage": _f(row.get("roce_percentage")),
-            })
+            records.append(
+                {
+                    "ticker": ticker,
+                    "company_name": str(row.get("company_name", "") or "").strip() or None,
+                    "about_company": str(row.get("about_company", "") or "").strip() or None,
+                    "website": str(row.get("website", "") or "").strip() or None,
+                    "nse_symbol": str(row.get("nse_profile", "") or "").strip() or None,
+                    "bse_code": str(row.get("bse_profile", "") or "").strip() or None,
+                    "face_value": _f(row.get("face_value")),
+                    "book_value": _f(row.get("book_value")),
+                    "roe_percentage": _f(row.get("roe_percentage")),
+                    "roce_percentage": _f(row.get("roce_percentage")),
+                }
+            )
         self._load_many("companies", records)
         self.counts["companies"] = {"loaded": len(records), "rejected": 0}
         logger.info(f"Loaded {len(records)} companies from companies.xlsx")
 
     def _extra_tickers(self) -> set:
         """Discover tickers in financial statements not yet in companies."""
-        known = set(self._ticker_map().keys()) if self._ticker_to_id else {
-            normalize_ticker(t) for t in pd.read_sql("SELECT ticker FROM companies", self.engine)["ticker"]
-        }
+        known = (
+            set(self._ticker_map().keys())
+            if self._ticker_to_id
+            else {
+                normalize_ticker(t)
+                for t in pd.read_sql("SELECT ticker FROM companies", self.engine)["ticker"]
+            }
+        )
         found = set()
         for name in ["profitandloss", "balancesheet", "cashflow"]:
             p = self.data_dir / "raw" / f"{name}.xlsx"
@@ -188,13 +215,17 @@ class ETLPipeline:
             return
         records = []
         for ticker in sorted(extras):
-            records.append({
-                "ticker": ticker,
-                "company_name": EXTRA_COMPANY_NAMES.get(ticker, ticker),
-            })
+            records.append(
+                {
+                    "ticker": ticker,
+                    "company_name": EXTRA_COMPANY_NAMES.get(ticker, ticker),
+                }
+            )
         self._load_many("companies", records)
         self.counts["extra_companies"] = {"loaded": len(records), "rejected": 0}
-        logger.info(f"Added {len(records)} extra companies not in reference files: {sorted(extras)}")
+        logger.info(
+            f"Added {len(records)} extra companies not in reference files: {sorted(extras)}"
+        )
 
     def load_sectors(self) -> None:
         path = self.data_dir / "supporting" / "sectors.xlsx"
@@ -212,20 +243,31 @@ class ETLPipeline:
                 sector_names.append(broad)
             cid = ticker_map.get(ticker) if ticker else None
             if cid is not None:
-                updates.append({
-                    "company_id": cid,
-                    "broad_sector": broad or None,
-                    "sub_sector": sub or None,
-                    "index_weight_pct": _f(row.get("index_weight_pct")),
-                    "market_cap_category": str(row.get("market_cap_category", "") or "").strip() or None,
-                })
+                updates.append(
+                    {
+                        "company_id": cid,
+                        "broad_sector": broad or None,
+                        "sub_sector": sub or None,
+                        "index_weight_pct": _f(row.get("index_weight_pct")),
+                        "market_cap_category": str(row.get("market_cap_category", "") or "").strip()
+                        or None,
+                    }
+                )
         with self.engine.begin() as conn:
             for u in updates:
-                conn.execute(text(
-                    "UPDATE companies SET broad_sector=:b, sub_sector=:s, "
-                    "index_weight_pct=:w, market_cap_category=:m WHERE company_id=:c"
-                ), {"b": u["broad_sector"], "s": u["sub_sector"],
-                    "w": u["index_weight_pct"], "m": u["market_cap_category"], "c": u["company_id"]})
+                conn.execute(
+                    text(
+                        "UPDATE companies SET broad_sector=:b, sub_sector=:s, "
+                        "index_weight_pct=:w, market_cap_category=:m WHERE company_id=:c"
+                    ),
+                    {
+                        "b": u["broad_sector"],
+                        "s": u["sub_sector"],
+                        "w": u["index_weight_pct"],
+                        "m": u["market_cap_category"],
+                        "c": u["company_id"],
+                    },
+                )
         unique = sorted({s for s in sector_names if s})
         self._load_many("sectors", [{"sector_name": s} for s in unique])
         self.counts["sectors"] = {"loaded": len(unique), "rejected": 0}
@@ -244,24 +286,28 @@ class ETLPipeline:
             if cid is None:
                 continue
             year = normalize_year(row.get("year"))
-            records.append({
-                "company_id": cid,
-                "year": year,
-                "market_cap_crore": _f(row.get("market_cap_crore")),
-                "enterprise_value_crore": _f(row.get("enterprise_value_crore")),
-                "pe_ratio": _f(row.get("pe_ratio")),
-                "pb_ratio": _f(row.get("pb_ratio")),
-                "ev_ebitda": _f(row.get("ev_ebitda")),
-                "dividend_yield_pct": _f(row.get("dividend_yield_pct")),
-            })
+            records.append(
+                {
+                    "company_id": cid,
+                    "year": year,
+                    "market_cap_crore": _f(row.get("market_cap_crore")),
+                    "enterprise_value_crore": _f(row.get("enterprise_value_crore")),
+                    "pe_ratio": _f(row.get("pe_ratio")),
+                    "pb_ratio": _f(row.get("pb_ratio")),
+                    "ev_ebitda": _f(row.get("ev_ebitda")),
+                    "dividend_yield_pct": _f(row.get("dividend_yield_pct")),
+                }
+            )
         rec_df = pd.DataFrame(records).drop_duplicates(subset=["company_id", "year"], keep="first")
         rec_df.to_sql("market_cap", self.engine, if_exists="append", index=False)
 
         latest = rec_df.sort_values("year").groupby("company_id").tail(1)
         with self.engine.begin() as conn:
             for _, row in latest.iterrows():
-                conn.execute(text("UPDATE companies SET market_cap_crore=:m WHERE company_id=:c"),
-                             {"m": row["market_cap_crore"], "c": int(row["company_id"])})
+                conn.execute(
+                    text("UPDATE companies SET market_cap_crore=:m WHERE company_id=:c"),
+                    {"m": row["market_cap_crore"], "c": int(row["company_id"])},
+                )
         self.counts["market_cap"] = {"loaded": len(rec_df), "rejected": 0}
         logger.info(f"Loaded market_cap: {len(rec_df)} rows")
 
@@ -291,40 +337,54 @@ class ETLPipeline:
     def load_profitandloss(self) -> None:
         def mapper(row, cid, year):
             return {
-                "company_id": cid, "year": year,
-                "sales": _f(row.get("sales")), "expenses": _f(row.get("expenses")),
+                "company_id": cid,
+                "year": year,
+                "sales": _f(row.get("sales")),
+                "expenses": _f(row.get("expenses")),
                 "operating_profit": _f(row.get("operating_profit")),
                 "opm_percentage": _f(row.get("opm_percentage")),
-                "other_income": _f(row.get("other_income")), "interest": _f(row.get("interest")),
+                "other_income": _f(row.get("other_income")),
+                "interest": _f(row.get("interest")),
                 "depreciation": _f(row.get("depreciation")),
                 "profit_before_tax": _f(row.get("profit_before_tax")),
                 "tax_percentage": _f(row.get("tax_percentage")),
-                "net_profit": _f(row.get("net_profit")), "eps": _f(row.get("eps")),
+                "net_profit": _f(row.get("net_profit")),
+                "eps": _f(row.get("eps")),
                 "dividend_payout": _f(row.get("dividend_payout")),
             }
+
         self._load_financial("profitandloss", "profitandloss", mapper)
 
     def load_balancesheet(self) -> None:
         def mapper(row, cid, year):
             return {
-                "company_id": cid, "year": year,
-                "equity_capital": _f(row.get("equity_capital")), "reserves": _f(row.get("reserves")),
-                "borrowings": _f(row.get("borrowings")), "other_liabilities": _f(row.get("other_liabilities")),
-                "total_liabilities": _f(row.get("total_liabilities")), "fixed_assets": _f(row.get("fixed_assets")),
-                "cwip": _f(row.get("cwip")), "investments": _f(row.get("investments")),
-                "other_asset": _f(row.get("other_asset")), "total_assets": _f(row.get("total_assets")),
+                "company_id": cid,
+                "year": year,
+                "equity_capital": _f(row.get("equity_capital")),
+                "reserves": _f(row.get("reserves")),
+                "borrowings": _f(row.get("borrowings")),
+                "other_liabilities": _f(row.get("other_liabilities")),
+                "total_liabilities": _f(row.get("total_liabilities")),
+                "fixed_assets": _f(row.get("fixed_assets")),
+                "cwip": _f(row.get("cwip")),
+                "investments": _f(row.get("investments")),
+                "other_asset": _f(row.get("other_asset")),
+                "total_assets": _f(row.get("total_assets")),
             }
+
         self._load_financial("balancesheet", "balancesheet", mapper)
 
     def load_cashflow(self) -> None:
         def mapper(row, cid, year):
             return {
-                "company_id": cid, "year": year,
+                "company_id": cid,
+                "year": year,
                 "operating_activity": _f(row.get("operating_activity")),
                 "investing_activity": _f(row.get("investing_activity")),
                 "financing_activity": _f(row.get("financing_activity")),
                 "net_cash_flow": _f(row.get("net_cash_flow")),
             }
+
         self._load_financial("cashflow", "cashflow", mapper)
 
     # ── Phase 3: Supplementary data ──────────────────────────────────
@@ -340,14 +400,18 @@ class ETLPipeline:
             if cid is None:
                 rejected += 1
                 continue
-            records.append({
-                "company_id": cid,
-                "date": str(row.get("date", "") or "").strip(),
-                "open_price": _f(row.get("open_price")), "high_price": _f(row.get("high_price")),
-                "low_price": _f(row.get("low_price")), "close_price": _f(row.get("close_price")),
-                "volume": int(row["volume"]) if pd.notna(row.get("volume")) else None,
-                "adjusted_close": _f(row.get("adjusted_close")),
-            })
+            records.append(
+                {
+                    "company_id": cid,
+                    "date": str(row.get("date", "") or "").strip(),
+                    "open_price": _f(row.get("open_price")),
+                    "high_price": _f(row.get("high_price")),
+                    "low_price": _f(row.get("low_price")),
+                    "close_price": _f(row.get("close_price")),
+                    "volume": (int(row["volume"]) if pd.notna(row.get("volume")) else None),
+                    "adjusted_close": _f(row.get("adjusted_close")),
+                }
+            )
         rec_df = pd.DataFrame(records).drop_duplicates(subset=["company_id", "date"], keep="first")
         rec_df.to_sql("stock_prices", self.engine, if_exists="append", index=False)
         self.counts["stock_prices"] = {"loaded": len(rec_df), "rejected": rejected}
@@ -366,11 +430,13 @@ class ETLPipeline:
             url = row.get("annual_report")
             if url is None or pd.isna(url) or not str(url).strip():
                 continue
-            records.append({
-                "company_id": cid,
-                "year": normalize_year(row.get("year")),
-                "annual_report": str(url).strip()[:500],
-            })
+            records.append(
+                {
+                    "company_id": cid,
+                    "year": normalize_year(row.get("year")),
+                    "annual_report": str(url).strip()[:500],
+                }
+            )
         rec_df = pd.DataFrame(records).drop_duplicates(subset=["company_id", "year"], keep="first")
         rec_df.to_sql("documents", self.engine, if_exists="append", index=False)
         self.counts["documents"] = {"loaded": len(rec_df), "rejected": 0}
@@ -386,13 +452,17 @@ class ETLPipeline:
             cid = self._resolve(row.get("company_id"))
             if cid is None:
                 continue
-            records.append({
-                "company_id": cid,
-                "compounded_sales_growth": str(row.get("compounded_sales_growth", "") or "") or None,
-                "compounded_profit_growth": str(row.get("compounded_profit_growth", "") or "") or None,
-                "stock_price_cagr": str(row.get("stock_price_cagr", "") or "") or None,
-                "roe": str(row.get("roe", "") or "") or None,
-            })
+            records.append(
+                {
+                    "company_id": cid,
+                    "compounded_sales_growth": str(row.get("compounded_sales_growth", "") or "")
+                    or None,
+                    "compounded_profit_growth": str(row.get("compounded_profit_growth", "") or "")
+                    or None,
+                    "stock_price_cagr": str(row.get("stock_price_cagr", "") or "") or None,
+                    "roe": str(row.get("roe", "") or "") or None,
+                }
+            )
         self._load_many("analysis", records)
         self.counts["analysis"] = {"loaded": len(records), "rejected": 0}
         logger.info(f"Loaded {len(records)} analysis records")
@@ -407,11 +477,13 @@ class ETLPipeline:
             cid = self._resolve(row.get("company_id"))
             if cid is None:
                 continue
-            records.append({
-                "company_id": cid,
-                "pros": str(row.get("pros", "") or "") or None,
-                "cons": str(row.get("cons", "") or "") or None,
-            })
+            records.append(
+                {
+                    "company_id": cid,
+                    "pros": str(row.get("pros", "") or "") or None,
+                    "cons": str(row.get("cons", "") or "") or None,
+                }
+            )
         self._load_many("prosandcons", records)
         self.counts["prosandcons"] = {"loaded": len(records), "rejected": 0}
         logger.info(f"Loaded {len(records)} pros/cons records")
@@ -421,10 +493,21 @@ class ETLPipeline:
         if not path.exists():
             return
         df = self._load_excel(path, header_row=SUPP_HEADER_ROW)
-        cols = ["net_profit_margin_pct", "operating_profit_margin_pct", "return_on_equity_pct",
-                "debt_to_equity", "interest_coverage", "asset_turnover", "free_cash_flow_cr",
-                "capex_cr", "earnings_per_share", "book_value_per_share",
-                "dividend_payout_ratio_pct", "total_debt_cr", "cash_from_operations_cr"]
+        cols = [
+            "net_profit_margin_pct",
+            "operating_profit_margin_pct",
+            "return_on_equity_pct",
+            "debt_to_equity",
+            "interest_coverage",
+            "asset_turnover",
+            "free_cash_flow_cr",
+            "capex_cr",
+            "earnings_per_share",
+            "book_value_per_share",
+            "dividend_payout_ratio_pct",
+            "total_debt_cr",
+            "cash_from_operations_cr",
+        ]
         records, rejected = [], 0
         for _, row in df.iterrows():
             cid = self._resolve(row.get("company_id"))
@@ -451,11 +534,13 @@ class ETLPipeline:
             cid = self._resolve(row.get("company_id"))
             if cid is None:
                 continue
-            records.append({
-                "peer_group_name": str(row.get("peer_group_name", "") or "").strip(),
-                "company_id": cid,
-                "is_benchmark": bool(row.get("is_benchmark", False)),
-            })
+            records.append(
+                {
+                    "peer_group_name": str(row.get("peer_group_name", "") or "").strip(),
+                    "company_id": cid,
+                    "is_benchmark": bool(row.get("is_benchmark", False)),
+                }
+            )
         self._load_many("peer_groups", records)
         self.counts["peer_groups"] = {"loaded": len(records), "rejected": 0}
         logger.info(f"Loaded {len(records)} peer group mappings")
@@ -492,12 +577,15 @@ class ETLPipeline:
         self._export_audit()
 
         from src.etl.validator import DQValidator
+
         validator = DQValidator(self.engine)
         failures = validator.run_all()
         validator.export_failures(failures, "output/validation_failures.csv")
         critical = sum(1 for f in failures if f.get("severity") == "CRITICAL")
         warnings = sum(1 for f in failures if f.get("severity") == "WARNING")
-        logger.info(f"Validation: {len(failures)} failures ({critical} CRITICAL, {warnings} WARNING)")
+        logger.info(
+            f"Validation: {len(failures)} failures ({critical} CRITICAL, {warnings} WARNING)"
+        )
 
         for t in TABLES:
             try:

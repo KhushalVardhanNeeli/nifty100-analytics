@@ -7,7 +7,6 @@ ROOT = Path(__file__).resolve().parent.parent.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import pandas as pd
 import plotly.express as px
 import streamlit as st
 
@@ -31,10 +30,19 @@ if companies.empty:
 debt_free = int((ratios["debt_to_equity"] == 0).sum()) if not ratios.empty else 0
 c1, c2, c3, c4, c5, c6 = st.columns(6)
 c1.metric("Total Companies", len(companies))
-c2.metric("Average ROE %", f"{ratios['return_on_equity_pct'].mean():.1f}" if not ratios.empty else "N/A")
+c2.metric(
+    "Average ROE %",
+    f"{ratios['return_on_equity_pct'].mean():.1f}" if not ratios.empty else "N/A",
+)
 c3.metric("Median P/E", f"{mc['pe_ratio'].median():.1f}" if not mc.empty else "N/A")
-c4.metric("Median D/E", f"{ratios['debt_to_equity'].median():.2f}" if not ratios.empty else "N/A")
-c5.metric("Median Rev CAGR 5y", f"{ratios['revenue_cagr_5yr'].median():.1f}%" if not ratios.empty else "N/A")
+c4.metric(
+    "Median D/E",
+    f"{ratios['debt_to_equity'].median():.2f}" if not ratios.empty else "N/A",
+)
+c5.metric(
+    "Median Rev CAGR 5y",
+    f"{ratios['revenue_cagr_5yr'].median():.1f}%" if not ratios.empty else "N/A",
+)
 c6.metric("Debt-Free Companies", debt_free)
 
 st.markdown("---")
@@ -56,11 +64,17 @@ with col_right:
     scores = db.get_composite_scores()
     if not scores.empty:
         top5 = scores.nlargest(5, "composite_score")
-        top5 = top5.merge(companies[["company_id", "company_name", "broad_sector"]],
-                          on="company_id", how="left")
+        top5 = top5.merge(
+            companies[["company_id", "company_name", "broad_sector"]],
+            on="company_id",
+            how="left",
+        )
         st.dataframe(
-            top5[["ticker", "company_name", "broad_sector", "composite_score"]]
-            .assign(composite_score=lambda d: d["composite_score"].round(1)),
-            use_container_width=True, hide_index=True)
+            top5[["ticker", "company_name", "broad_sector", "composite_score"]].assign(
+                composite_score=lambda d: d["composite_score"].round(1)
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
     else:
         st.info("Composite scores unavailable.")

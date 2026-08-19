@@ -11,8 +11,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from src.dashboard.utils import db
 from src.analytics.radar import METRICS, _rank_within
+from src.dashboard.utils import db
 
 st.set_page_config(layout="wide", page_title="Nifty 100 Analytics — Peers")
 
@@ -45,7 +45,9 @@ labels = [m[3] for m in METRICS]
 comp_vals, peer_avgs = [], []
 for name, col, invert, _ in METRICS:
     if col not in peers_data.columns:
-        comp_vals.append(0.0); peer_avgs.append(0.0); continue
+        comp_vals.append(0.0)
+        peer_avgs.append(0.0)
+        continue
     ranks = _rank_within(peers_data[col], invert)
     cv = ranks.get(cid)
     comp_vals.append(0.0 if cv is None or pd.isna(cv) else float(cv))
@@ -54,10 +56,20 @@ for name, col, invert, _ in METRICS:
 
 fig = go.Figure()
 fig.add_trace(go.Scatterpolar(r=comp_vals, theta=labels, fill="toself", name=ticker))
-fig.add_trace(go.Scatterpolar(r=peer_avgs, theta=labels, fill="none",
-                              line=dict(dash="dash", color="gray"), name=f"{group} avg"))
-fig.update_layout(polar=dict(radialaxis=dict(range=[0, 100])), height=560,
-                  title=f"{ticker} vs {group} average (percentile ranks)")
+fig.add_trace(
+    go.Scatterpolar(
+        r=peer_avgs,
+        theta=labels,
+        fill="none",
+        line=dict(dash="dash", color="gray"),
+        name=f"{group} avg",
+    )
+)
+fig.update_layout(
+    polar=dict(radialaxis=dict(range=[0, 100])),
+    height=560,
+    title=f"{ticker} vs {group} average (percentile ranks)",
+)
 st.plotly_chart(fig, use_container_width=True)
 
 st.markdown("---")
@@ -70,15 +82,30 @@ for _, p in peers.iterrows():
     if row.empty:
         continue
     r = row.iloc[0]
-    table_rows.append({
-        "Ticker": p["ticker"], "Company": p["company_name"],
-        "Benchmark": "★" if p["is_benchmark"] else "",
-        "ROE %": round(r["return_on_equity_pct"], 1) if pd.notna(r["return_on_equity_pct"]) else None,
-        "ROCE %": round(r["return_on_capital_employed_pct"], 1) if pd.notna(r["return_on_capital_employed_pct"]) else None,
-        "NPM %": round(r["net_profit_margin_pct"], 1) if pd.notna(r["net_profit_margin_pct"]) else None,
-        "D/E": round(r["debt_to_equity"], 2) if pd.notna(r["debt_to_equity"]) else None,
-        "Composite": round(r["composite_score"], 1) if pd.notna(r["composite_score"]) else None,
-    })
+    table_rows.append(
+        {
+            "Ticker": p["ticker"],
+            "Company": p["company_name"],
+            "Benchmark": "★" if p["is_benchmark"] else "",
+            "ROE %": (
+                round(r["return_on_equity_pct"], 1) if pd.notna(r["return_on_equity_pct"]) else None
+            ),
+            "ROCE %": (
+                round(r["return_on_capital_employed_pct"], 1)
+                if pd.notna(r["return_on_capital_employed_pct"])
+                else None
+            ),
+            "NPM %": (
+                round(r["net_profit_margin_pct"], 1)
+                if pd.notna(r["net_profit_margin_pct"])
+                else None
+            ),
+            "D/E": (round(r["debt_to_equity"], 2) if pd.notna(r["debt_to_equity"]) else None),
+            "Composite": (
+                round(r["composite_score"], 1) if pd.notna(r["composite_score"]) else None
+            ),
+        }
+    )
 
 tbl = pd.DataFrame(table_rows)
 st.dataframe(tbl, use_container_width=True, hide_index=True)

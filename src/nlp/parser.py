@@ -20,13 +20,25 @@ DB_PATH = os.getenv("DB_PATH", "db/nifty100.db")
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "output")
 
 PATTERN = r"(\d+)\s*Years?:?\s*([\d.]+)%"
-METRIC_FIELDS = ["compounded_sales_growth", "compounded_profit_growth",
-                 "stock_price_cagr", "roe"]
+METRIC_FIELDS = [
+    "compounded_sales_growth",
+    "compounded_profit_growth",
+    "stock_price_cagr",
+    "roe",
+]
 
 # metric_type -> computed CAGR column in financial_ratios
 CAGR_MAP = {
-    "compounded_sales_growth": {3: "revenue_cagr_3yr", 5: "revenue_cagr_5yr", 10: "revenue_cagr_10yr"},
-    "compounded_profit_growth": {3: "pat_cagr_3yr", 5: "pat_cagr_5yr", 10: "pat_cagr_10yr"},
+    "compounded_sales_growth": {
+        3: "revenue_cagr_3yr",
+        5: "revenue_cagr_5yr",
+        10: "revenue_cagr_10yr",
+    },
+    "compounded_profit_growth": {
+        3: "pat_cagr_3yr",
+        5: "pat_cagr_5yr",
+        10: "pat_cagr_10yr",
+    },
 }
 
 
@@ -35,6 +47,7 @@ def parse_text(value: str):
     if value is None or not str(value).strip():
         return None
     import re
+
     m = re.search(PATTERN, str(value))
     if not m:
         return None
@@ -55,16 +68,23 @@ def parse_analysis(db_path: str = DB_PATH) -> tuple:
                 continue
             parsed = parse_text(val)
             if parsed is None:
-                failures.append({
-                    "company_id": int(cid), "metric_type": field,
-                    "text": str(val),
-                })
+                failures.append(
+                    {
+                        "company_id": int(cid),
+                        "metric_type": field,
+                        "text": str(val),
+                    }
+                )
             else:
                 period, value = parsed
-                parsed_rows.append({
-                    "company_id": int(cid), "metric_type": field,
-                    "period_years": period, "value_pct": value,
-                })
+                parsed_rows.append(
+                    {
+                        "company_id": int(cid),
+                        "metric_type": field,
+                        "period_years": period,
+                        "value_pct": value,
+                    }
+                )
 
     Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
     parsed_df = pd.DataFrame(parsed_rows)
@@ -79,9 +99,14 @@ def crosscheck_cagr(parsed_df: pd.DataFrame, db_path: str = DB_PATH) -> pd.DataF
     if parsed_df.empty:
         return pd.DataFrame()
     engine = create_engine(f"sqlite:///{db_path}")
-    fr = pd.read_sql(text("SELECT company_id, year, revenue_cagr_3yr, revenue_cagr_5yr, "
-                          "revenue_cagr_10yr, pat_cagr_3yr, pat_cagr_5yr, pat_cagr_10yr "
-                          "FROM financial_ratios"), engine)
+    fr = pd.read_sql(
+        text(
+            "SELECT company_id, year, revenue_cagr_3yr, revenue_cagr_5yr, "
+            "revenue_cagr_10yr, pat_cagr_3yr, pat_cagr_5yr, pat_cagr_10yr "
+            "FROM financial_ratios"
+        ),
+        engine,
+    )
     engine.dispose()
     latest = fr.loc[fr.groupby("company_id")["year"].idxmax()]
 
@@ -98,14 +123,16 @@ def crosscheck_cagr(parsed_df: pd.DataFrame, db_path: str = DB_PATH) -> pd.DataF
         if pd.isna(computed):
             continue
         if abs(computed - r["value_pct"]) > 5:
-            anomalies.append({
-                "company_id": int(r["company_id"]),
-                "metric_type": r["metric_type"],
-                "period_years": r["period_years"],
-                "parsed_pct": r["value_pct"],
-                "computed_pct": round(computed, 2),
-                "divergence_pct": round(abs(computed - r["value_pct"]), 2),
-            })
+            anomalies.append(
+                {
+                    "company_id": int(r["company_id"]),
+                    "metric_type": r["metric_type"],
+                    "period_years": r["period_years"],
+                    "parsed_pct": r["value_pct"],
+                    "computed_pct": round(computed, 2),
+                    "divergence_pct": round(abs(computed - r["value_pct"]), 2),
+                }
+            )
 
     out = pd.DataFrame(anomalies)
     out.to_csv(os.path.join(OUTPUT_DIR, "cagr_crosscheck.csv"), index=False)

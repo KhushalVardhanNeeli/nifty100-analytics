@@ -50,10 +50,14 @@ for _, row in docs.iterrows():
     if status == "ok":
         st.markdown(f"**{yr}** — [Open PDF]({url})")
     elif status.startswith("error:404"):
-        st.markdown(f"**{yr}** — <span style='color:red;font-weight:bold'>Report unavailable (404)</span>",
-                    unsafe_allow_html=True)
+        st.markdown(
+            f"**{yr}** — <span style='color:red;font-weight:bold'>Report unavailable (404)</span>",
+            unsafe_allow_html=True,
+        )
     elif status == "unknown":
         st.markdown(f"**{yr}** — [Open PDF]({url}) ⚠️ (unverified)")
     else:
-        st.markdown(f"**{yr}** — <span style='color:red'>Report unavailable</span>",
-                    unsafe_allow_html=True)
+        st.markdown(
+            f"**{yr}** — <span style='color:red'>Report unavailable</span>",
+            unsafe_allow_html=True,
+        )

@@ -41,21 +41,45 @@ latest = ratios.sort_values("year").tail(1)
 
 # ── Company card ────────────────────────────────────────────────────
 st.markdown(f"### {comp['company_name']} ({comp['ticker']})")
-meta = " · ".join(x for x in [
-    comp.get("broad_sector"), comp.get("sub_sector"),
-    comp.get("about_company") if pd.notna(comp.get("about_company")) else None,
-] if x)
+meta = " · ".join(
+    x
+    for x in [
+        comp.get("broad_sector"),
+        comp.get("sub_sector"),
+        comp.get("about_company") if pd.notna(comp.get("about_company")) else None,
+    ]
+    if x
+)
 st.caption(meta or "—")
 
 if not latest.empty:
     r = latest.iloc[0]
     c1, c2, c3, c4, c5, c6 = st.columns(6)
-    c1.metric("ROE %", f"{r['return_on_equity_pct']:.1f}" if pd.notna(r['return_on_equity_pct']) else "N/A")
-    c2.metric("ROCE %", f"{r['return_on_capital_employed_pct']:.1f}" if pd.notna(r['return_on_capital_employed_pct']) else "N/A")
-    c3.metric("Net Profit Margin %", f"{r['net_profit_margin_pct']:.1f}" if pd.notna(r['net_profit_margin_pct']) else "N/A")
-    c4.metric("D/E", f"{r['debt_to_equity']:.2f}" if pd.notna(r['debt_to_equity']) else "N/A")
-    c5.metric("Revenue CAGR 5y", f"{r['revenue_cagr_5yr']:.1f}%" if pd.notna(r['revenue_cagr_5yr']) else "N/A")
-    c6.metric("FCF (Cr)", f"{r['free_cash_flow_cr']:,.0f}" if pd.notna(r['free_cash_flow_cr']) else "N/A")
+    c1.metric(
+        "ROE %",
+        (f"{r['return_on_equity_pct']:.1f}" if pd.notna(r["return_on_equity_pct"]) else "N/A"),
+    )
+    c2.metric(
+        "ROCE %",
+        (
+            f"{r['return_on_capital_employed_pct']:.1f}"
+            if pd.notna(r["return_on_capital_employed_pct"])
+            else "N/A"
+        ),
+    )
+    c3.metric(
+        "Net Profit Margin %",
+        (f"{r['net_profit_margin_pct']:.1f}" if pd.notna(r["net_profit_margin_pct"]) else "N/A"),
+    )
+    c4.metric("D/E", f"{r['debt_to_equity']:.2f}" if pd.notna(r["debt_to_equity"]) else "N/A")
+    c5.metric(
+        "Revenue CAGR 5y",
+        f"{r['revenue_cagr_5yr']:.1f}%" if pd.notna(r["revenue_cagr_5yr"]) else "N/A",
+    )
+    c6.metric(
+        "FCF (Cr)",
+        f"{r['free_cash_flow_cr']:,.0f}" if pd.notna(r["free_cash_flow_cr"]) else "N/A",
+    )
 
 st.markdown("---")
 
@@ -63,7 +87,8 @@ st.markdown("---")
 if not pl.empty:
     st.subheader("Revenue and Net Profit (10-year)")
     pl_chart = pl.tail(10)[["year", "sales", "net_profit"]].melt(
-        id_vars="year", var_name="Metric", value_name="Value")
+        id_vars="year", var_name="Metric", value_name="Value"
+    )
     fig = px.bar(pl_chart, x="year", y="Value", color="Metric", barmode="group")
     fig.update_layout(height=380)
     st.plotly_chart(fig, use_container_width=True)
@@ -72,11 +97,28 @@ if not pl.empty:
 if not ratios.empty:
     st.subheader("ROE and ROCE Trend")
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=ratios["year"], y=ratios["return_on_equity_pct"],
-                             name="ROE %", mode="lines+markers"))
-    fig.add_trace(go.Scatter(x=ratios["year"], y=ratios["return_on_capital_employed_pct"],
-                             name="ROCE %", mode="lines+markers", yaxis="y2"))
-    fig.update_layout(height=380, yaxis=dict(title="ROE %"), yaxis2=dict(title="ROCE %", overlaying="y", side="right"))
+    fig.add_trace(
+        go.Scatter(
+            x=ratios["year"],
+            y=ratios["return_on_equity_pct"],
+            name="ROE %",
+            mode="lines+markers",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=ratios["year"],
+            y=ratios["return_on_capital_employed_pct"],
+            name="ROCE %",
+            mode="lines+markers",
+            yaxis="y2",
+        )
+    )
+    fig.update_layout(
+        height=380,
+        yaxis=dict(title="ROE %"),
+        yaxis2=dict(title="ROCE %", overlaying="y", side="right"),
+    )
     st.plotly_chart(fig, use_container_width=True)
 
 # ── Pros & Cons badges ──────────────────────────────────────────────

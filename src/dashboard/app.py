@@ -15,13 +15,14 @@ if str(ROOT) not in sys.path:
 
 import streamlit as st
 
-st.set_page_config(layout="wide", page_title="Nifty 100 Analytics", initial_sidebar_state="expanded")
+st.set_page_config(
+    layout="wide", page_title="Nifty 100 Analytics", initial_sidebar_state="expanded"
+)
 
 st.title("Nifty 100 Analytics")
 st.caption("Financial intelligence for India's top listed companies")
 
-st.markdown(
-    """
+st.markdown("""
     Use the **sidebar** to navigate the 8 screens:
 
     | Screen | What you'll find |
@@ -34,5 +35,4 @@ st.markdown(
     | 06 Sectors | Sector bubble chart and median KPI comparison |
     | 07 Capital | Capital-allocation treemap across 8 patterns |
     | 08 Reports | Annual-report PDF links per company |
-    """
-)
+    """)

@@ -48,10 +48,10 @@ intelligence:
 
 # ── Sprint 6: API, ML, Tests ─────────────────────────────────────
 api:
-	uvicorn src.api:app --reload --host 0.0.0.0 --port 8000
+	uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
 
 ml:
-	python -m src.ml.clustering
+	python -m src.analytics.clustering
 
 test:
 	python -m pytest tests/ -v --tb=short -ra

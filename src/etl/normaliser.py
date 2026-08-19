@@ -111,7 +111,11 @@ def normalize_year(value):
             return year
 
     # 2-digit fiscal year with a month prefix, e.g. "Mar-13", "Mar 24".
-    m = re.search(r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[-/\s]+(\d{2})\b", s, re.IGNORECASE)
+    m = re.search(
+        r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[-/\s]+(\d{2})\b",
+        s,
+        re.IGNORECASE,
+    )
     if m:
         yy = int(m.group(2))
         year = 2000 + yy if yy < 70 else 1900 + yy
@@ -145,7 +149,21 @@ def normalize_numeric(value):
         return None
     if isinstance(value, str):
         s = value.strip()
-        if s in ("", "-", "--", "—", "–", "NA", "N/A", "na", "n/a", "null", "NULL", "Nil", "nil"):
+        if s in (
+            "",
+            "-",
+            "--",
+            "—",
+            "–",
+            "NA",
+            "N/A",
+            "na",
+            "n/a",
+            "null",
+            "NULL",
+            "Nil",
+            "nil",
+        ):
             return 0.0
         if s.endswith("%"):
             s = s[:-1].strip()

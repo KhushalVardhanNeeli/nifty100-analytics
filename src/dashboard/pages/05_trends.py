@@ -37,19 +37,37 @@ if pl.empty:
 data = pl[["year", "sales", "net_profit", "operating_profit", "eps"]].copy()
 if not ratios.empty:
     data = data.merge(
-        ratios[["year", "return_on_equity_pct", "return_on_capital_employed_pct",
-                "net_profit_margin_pct", "debt_to_equity", "free_cash_flow_cr"]],
-        on="year", how="left")
+        ratios[
+            [
+                "year",
+                "return_on_equity_pct",
+                "return_on_capital_employed_pct",
+                "net_profit_margin_pct",
+                "debt_to_equity",
+                "free_cash_flow_cr",
+            ]
+        ],
+        on="year",
+        how="left",
+    )
 
 metric_labels = {
-    "sales": "Sales (Cr)", "net_profit": "Net Profit (Cr)",
-    "operating_profit": "Operating Profit (Cr)", "eps": "EPS (₹)",
-    "return_on_equity_pct": "ROE %", "return_on_capital_employed_pct": "ROCE %",
-    "net_profit_margin_pct": "Net Profit Margin %", "debt_to_equity": "D/E",
+    "sales": "Sales (Cr)",
+    "net_profit": "Net Profit (Cr)",
+    "operating_profit": "Operating Profit (Cr)",
+    "eps": "EPS (₹)",
+    "return_on_equity_pct": "ROE %",
+    "return_on_capital_employed_pct": "ROCE %",
+    "net_profit_margin_pct": "Net Profit Margin %",
+    "debt_to_equity": "D/E",
     "free_cash_flow_cr": "Free Cash Flow (Cr)",
 }
-metrics = st.multiselect("Select up to 3 metrics", list(metric_labels.keys()),
-                         default=["sales", "net_profit"], max_selections=3)
+metrics = st.multiselect(
+    "Select up to 3 metrics",
+    list(metric_labels.keys()),
+    default=["sales", "net_profit"],
+    max_selections=3,
+)
 data = data[["year"] + metrics]
 
 if not metrics:
@@ -65,8 +83,14 @@ for m in metrics:
     fig.add_trace(go.Scatter(x=s["year"], y=s[m], name=metric_labels[m], mode="lines+markers"))
     for _, r in s.iterrows():
         if pd.notna(r["yoy"]):
-            fig.add_annotation(x=r["year"], y=r[m], text=f"{r['yoy']:.0f}%",
-                               showarrow=False, font=dict(size=9), yshift=12)
+            fig.add_annotation(
+                x=r["year"],
+                y=r[m],
+                text=f"{r['yoy']:.0f}%",
+                showarrow=False,
+                font=dict(size=9),
+                yshift=12,
+            )
 
 fig.update_layout(height=520, title=f"{ticker} — 10-year trends (YoY % shown)")
 st.plotly_chart(fig, use_container_width=True)

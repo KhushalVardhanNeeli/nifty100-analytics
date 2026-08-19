@@ -21,6 +21,7 @@ class DQValidator:
 
     def _query(self, sql, params=None):
         import pandas as pd
+
         return pd.read_sql(sql, self.engine, params=params)
 
     def _is_valid_url(self, url):
@@ -89,8 +90,17 @@ class DQValidator:
             try:
                 df = self._query(f'SELECT "{pk}" AS pk FROM "{table}"')
             except Exception as e:
-                failures.append(self._fail("DQ-01", "CRITICAL", table, pk, None, None,
-                                           f"Error checking DQ-01: {e}"))
+                failures.append(
+                    self._fail(
+                        "DQ-01",
+                        "CRITICAL",
+                        table,
+                        pk,
+                        None,
+                        None,
+                        f"Error checking DQ-01: {e}",
+                    )
+                )
                 continue
             if df.empty:
                 continue
@@ -98,31 +108,61 @@ class DQValidator:
             if not dupes.empty:
                 for pk_val in dupes["pk"].drop_duplicates().tolist():
                     cnt = int((df["pk"] == pk_val).sum())
-                    failures.append(self._fail(
-                        "DQ-01", "CRITICAL", table, pk, None, None,
-                        f"Duplicate PK value {pk_val} found {cnt} times in {table}",
-                    ))
+                    failures.append(
+                        self._fail(
+                            "DQ-01",
+                            "CRITICAL",
+                            table,
+                            pk,
+                            None,
+                            None,
+                            f"Duplicate PK value {pk_val} found {cnt} times in {table}",
+                        )
+                    )
         return failures
 
     def dq02_composite_uniqueness(self):
         """DQ-02 — (company_id, year) uniqueness in fact tables (CRITICAL)."""
         failures = []
-        for table in ["profitandloss", "balancesheet", "cashflow", "financial_ratios", "market_cap"]:
+        for table in [
+            "profitandloss",
+            "balancesheet",
+            "cashflow",
+            "financial_ratios",
+            "market_cap",
+        ]:
             try:
                 df = self._query(f'SELECT company_id, year FROM "{table}"')
             except Exception as e:
-                failures.append(self._fail("DQ-02", "CRITICAL", table, "company_id,year", None, None,
-                                           f"Error checking DQ-02: {e}"))
+                failures.append(
+                    self._fail(
+                        "DQ-02",
+                        "CRITICAL",
+                        table,
+                        "company_id,year",
+                        None,
+                        None,
+                        f"Error checking DQ-02: {e}",
+                    )
+                )
                 continue
             if df.empty:
                 continue
             dupes = df[df.duplicated(subset=["company_id", "year"], keep=False)]
-            for _, row in dupes.groupby(["company_id", "year"]).size().reset_index(name="count").iterrows():
-                failures.append(self._fail(
-                    "DQ-02", "CRITICAL", table, "company_id,year",
-                    int(row["company_id"]), int(row["year"]),
-                    f"Duplicate (company_id={row['company_id']}, year={row['year']}) found {row['count']} times",
-                ))
+            for _, row in (
+                dupes.groupby(["company_id", "year"]).size().reset_index(name="count").iterrows()
+            ):
+                failures.append(
+                    self._fail(
+                        "DQ-02",
+                        "CRITICAL",
+                        table,
+                        "company_id,year",
+                        int(row["company_id"]),
+                        int(row["year"]),
+                        f"Duplicate (company_id={row['company_id']}, year={row['year']}) found {row['count']} times",
+                    )
+                )
         return failures
 
     def dq03_fk_integrity(self):
@@ -135,9 +175,18 @@ class DQValidator:
         if companies.empty:
             return failures
         valid = set(companies["company_id"].dropna().astype(int).tolist())
-        for table in ["profitandloss", "balancesheet", "cashflow", "stock_prices",
-                      "analysis", "documents", "prosandcons", "financial_ratios",
-                      "peer_groups", "market_cap"]:
+        for table in [
+            "profitandloss",
+            "balancesheet",
+            "cashflow",
+            "stock_prices",
+            "analysis",
+            "documents",
+            "prosandcons",
+            "financial_ratios",
+            "peer_groups",
+            "market_cap",
+        ]:
             try:
                 df = self._query(f'SELECT DISTINCT company_id FROM "{table}"')
             except Exception:
@@ -145,10 +194,17 @@ class DQValidator:
             for _, row in df.iterrows():
                 cid = row["company_id"]
                 if cid is not None and int(cid) not in valid:
-                    failures.append(self._fail(
-                        "DQ-03", "CRITICAL", table, "company_id", int(cid), None,
-                        f"FK violation: company_id={cid} not in companies",
-                    ))
+                    failures.append(
+                        self._fail(
+                            "DQ-03",
+                            "CRITICAL",
+                            table,
+                            "company_id",
+                            int(cid),
+                            None,
+                            f"FK violation: company_id={cid} not in companies",
+                        )
+                    )
         return failures
 
     # ── WARNING rules ────────────────────────────────────────────────
@@ -157,45 +213,83 @@ class DQValidator:
         """DQ-04 — balance sheet balance: total_assets ≈ total_liabilities (<1%)."""
         failures = []
         try:
-            df = self._query("SELECT bs_id, company_id, year, total_assets, total_liabilities "
-                             "FROM balancesheet")
+            df = self._query(
+                "SELECT bs_id, company_id, year, total_assets, total_liabilities "
+                "FROM balancesheet"
+            )
         except Exception as e:
-            return [self._fail("DQ-04", "WARNING", "balancesheet", "total_assets", None, None,
-                               f"Error checking DQ-04: {e}")]
+            return [
+                self._fail(
+                    "DQ-04",
+                    "WARNING",
+                    "balancesheet",
+                    "total_assets",
+                    None,
+                    None,
+                    f"Error checking DQ-04: {e}",
+                )
+            ]
         for _, row in df.iterrows():
             ta, tl = row["total_assets"], row["total_liabilities"]
             if ta is None or tl is None or ta == 0:
                 continue
             if abs(ta - tl) / abs(ta) >= 0.01:
-                failures.append(self._fail(
-                    "DQ-04", "WARNING", "balancesheet", "total_assets",
-                    int(row["company_id"]), row["year"],
-                    f"BS imbalance: assets={ta}, liabilities={tl}, diff={abs(ta - tl) / abs(ta):.4%}",
-                ))
+                failures.append(
+                    self._fail(
+                        "DQ-04",
+                        "WARNING",
+                        "balancesheet",
+                        "total_assets",
+                        int(row["company_id"]),
+                        row["year"],
+                        f"BS imbalance: assets={ta}, liabilities={tl}, diff={abs(ta - tl) / abs(ta):.4%}",
+                    )
+                )
         return failures
 
     def dq05_opm_cross_check(self):
         """DQ-05 — OPM cross-check: opm_percentage vs operating_profit/sales (>1% diff)."""
         failures = []
         try:
-            df = self._query("SELECT pnl_id, company_id, year, opm_percentage, "
-                             "operating_profit, sales FROM profitandloss")
+            df = self._query(
+                "SELECT pnl_id, company_id, year, opm_percentage, "
+                "operating_profit, sales FROM profitandloss"
+            )
         except Exception as e:
-            return [self._fail("DQ-05", "WARNING", "profitandloss", "opm_percentage", None, None,
-                               f"Error checking DQ-05: {e}")]
+            return [
+                self._fail(
+                    "DQ-05",
+                    "WARNING",
+                    "profitandloss",
+                    "opm_percentage",
+                    None,
+                    None,
+                    f"Error checking DQ-05: {e}",
+                )
+            ]
         for _, row in df.iterrows():
-            opm, op, sales = row["opm_percentage"], row["operating_profit"], row["sales"]
+            opm, op, sales = (
+                row["opm_percentage"],
+                row["operating_profit"],
+                row["sales"],
+            )
             if opm is None or op is None or sales is None or sales == 0:
                 continue
             # Normalise to a ratio: percent form (>1 in magnitude) -> /100.
             stored = opm / 100.0 if abs(opm) > 1 else opm
             calc = op / sales
             if abs(stored - calc) >= 0.01:
-                failures.append(self._fail(
-                    "DQ-05", "WARNING", "profitandloss", "opm_percentage",
-                    int(row["company_id"]), row["year"],
-                    f"OPM mismatch: source={opm}, calc={calc:.4f}, diff={abs(stored - calc):.4f}",
-                ))
+                failures.append(
+                    self._fail(
+                        "DQ-05",
+                        "WARNING",
+                        "profitandloss",
+                        "opm_percentage",
+                        int(row["company_id"]),
+                        row["year"],
+                        f"OPM mismatch: source={opm}, calc={calc:.4f}, diff={abs(stored - calc):.4f}",
+                    )
+                )
         return failures
 
     def dq06_positive_sales(self):
@@ -204,33 +298,73 @@ class DQValidator:
         try:
             df = self._query("SELECT pnl_id, company_id, year, sales FROM profitandloss")
         except Exception as e:
-            return [self._fail("DQ-06", "WARNING", "profitandloss", "sales", None, None,
-                               f"Error checking DQ-06: {e}")]
+            return [
+                self._fail(
+                    "DQ-06",
+                    "WARNING",
+                    "profitandloss",
+                    "sales",
+                    None,
+                    None,
+                    f"Error checking DQ-06: {e}",
+                )
+            ]
         for _, row in df.iterrows():
             if row["sales"] is not None and row["sales"] <= 0:
-                failures.append(self._fail(
-                    "DQ-06", "WARNING", "profitandloss", "sales",
-                    int(row["company_id"]), row["year"], f"Non-positive sales: {row['sales']}",
-                ))
+                failures.append(
+                    self._fail(
+                        "DQ-06",
+                        "WARNING",
+                        "profitandloss",
+                        "sales",
+                        int(row["company_id"]),
+                        row["year"],
+                        f"Non-positive sales: {row['sales']}",
+                    )
+                )
         return failures
 
     def dq07_net_cash(self):
         """DQ-07 — net cash flow must be present for reported cash-flow rows."""
         failures = []
         try:
-            df = self._query("SELECT cf_id, company_id, year, operating_activity, "
-                             "investing_activity, financing_activity, net_cash_flow FROM cashflow")
+            df = self._query(
+                "SELECT cf_id, company_id, year, operating_activity, "
+                "investing_activity, financing_activity, net_cash_flow FROM cashflow"
+            )
         except Exception as e:
-            return [self._fail("DQ-07", "WARNING", "cashflow", "net_cash_flow", None, None,
-                               f"Error checking DQ-07: {e}")]
+            return [
+                self._fail(
+                    "DQ-07",
+                    "WARNING",
+                    "cashflow",
+                    "net_cash_flow",
+                    None,
+                    None,
+                    f"Error checking DQ-07: {e}",
+                )
+            ]
         for _, row in df.iterrows():
-            has_activity = any(row[c] is not None for c in
-                               ["operating_activity", "investing_activity", "financing_activity"])
+            has_activity = any(
+                row[c] is not None
+                for c in [
+                    "operating_activity",
+                    "investing_activity",
+                    "financing_activity",
+                ]
+            )
             if has_activity and row["net_cash_flow"] is None:
-                failures.append(self._fail(
-                    "DQ-07", "WARNING", "cashflow", "net_cash_flow",
-                    int(row["company_id"]), row["year"], "net_cash_flow missing for reported activities",
-                ))
+                failures.append(
+                    self._fail(
+                        "DQ-07",
+                        "WARNING",
+                        "cashflow",
+                        "net_cash_flow",
+                        int(row["company_id"]),
+                        row["year"],
+                        "net_cash_flow missing for reported activities",
+                    )
+                )
         return failures
 
     def dq08_tax_rate(self):
@@ -243,10 +377,17 @@ class DQValidator:
         for _, row in df.iterrows():
             tr = row["tax_percentage"]
             if tr is not None and (tr < 0 or tr > 100):
-                failures.append(self._fail(
-                    "DQ-08", "WARNING", "profitandloss", "tax_percentage",
-                    int(row["company_id"]), row["year"], f"Tax rate out of 0-100% range: {tr}",
-                ))
+                failures.append(
+                    self._fail(
+                        "DQ-08",
+                        "WARNING",
+                        "profitandloss",
+                        "tax_percentage",
+                        int(row["company_id"]),
+                        row["year"],
+                        f"Tax rate out of 0-100% range: {tr}",
+                    )
+                )
         return failures
 
     def dq09_dividend_cap(self):
@@ -259,10 +400,17 @@ class DQValidator:
         for _, row in df.iterrows():
             dp = row["dividend_payout"]
             if dp is not None and dp > 200:
-                failures.append(self._fail(
-                    "DQ-09", "WARNING", "profitandloss", "dividend_payout",
-                    int(row["company_id"]), row["year"], f"Dividend payout exceeds 200% cap: {dp}",
-                ))
+                failures.append(
+                    self._fail(
+                        "DQ-09",
+                        "WARNING",
+                        "profitandloss",
+                        "dividend_payout",
+                        int(row["company_id"]),
+                        row["year"],
+                        f"Dividend payout exceeds 200% cap: {dp}",
+                    )
+                )
         return failures
 
     def dq10_valid_urls(self):
@@ -274,10 +422,17 @@ class DQValidator:
             return failures
         for _, row in df.iterrows():
             if row["website"] is not None and not self._is_valid_url(row["website"]):
-                failures.append(self._fail(
-                    "DQ-10", "WARNING", "companies", "website",
-                    int(row["company_id"]), None, f"Invalid website URL: {row['website']}",
-                ))
+                failures.append(
+                    self._fail(
+                        "DQ-10",
+                        "WARNING",
+                        "companies",
+                        "website",
+                        int(row["company_id"]),
+                        None,
+                        f"Invalid website URL: {row['website']}",
+                    )
+                )
         return failures
 
     def dq11_eps_sign(self):
@@ -292,43 +447,73 @@ class DQValidator:
             if eps is None or np_ is None or eps == 0 or np_ == 0:
                 continue
             if (eps > 0 and np_ < 0) or (eps < 0 and np_ > 0):
-                failures.append(self._fail(
-                    "DQ-11", "WARNING", "profitandloss", "eps",
-                    int(row["company_id"]), row["year"],
-                    f"EPS sign mismatch: EPS={eps}, net_profit={np_}",
-                ))
+                failures.append(
+                    self._fail(
+                        "DQ-11",
+                        "WARNING",
+                        "profitandloss",
+                        "eps",
+                        int(row["company_id"]),
+                        row["year"],
+                        f"EPS sign mismatch: EPS={eps}, net_profit={np_}",
+                    )
+                )
         return failures
 
     def dq12_bs_equity_balance(self):
         """DQ-12 — balance sheet components must reconcile to total_liabilities."""
         failures = []
         try:
-            df = self._query("SELECT bs_id, company_id, year, equity_capital, reserves, "
-                             "borrowings, other_liabilities, total_liabilities FROM balancesheet")
+            df = self._query(
+                "SELECT bs_id, company_id, year, equity_capital, reserves, "
+                "borrowings, other_liabilities, total_liabilities FROM balancesheet"
+            )
         except Exception:
             return failures
         for _, row in df.iterrows():
             tl = row["total_liabilities"]
             if tl is None or tl == 0:
                 continue
-            comps = sum(v for v in [row["equity_capital"], row["reserves"],
-                                    row["borrowings"], row["other_liabilities"]] if v is not None)
+            comps = sum(
+                v
+                for v in [
+                    row["equity_capital"],
+                    row["reserves"],
+                    row["borrowings"],
+                    row["other_liabilities"],
+                ]
+                if v is not None
+            )
             if abs(comps - tl) / abs(tl) >= 0.01:
-                failures.append(self._fail(
-                    "DQ-12", "WARNING", "balancesheet", "equity_capital",
-                    int(row["company_id"]), row["year"],
-                    f"BS components ({comps}) don't reconcile with total_liabilities ({tl})",
-                ))
+                failures.append(
+                    self._fail(
+                        "DQ-12",
+                        "WARNING",
+                        "balancesheet",
+                        "equity_capital",
+                        int(row["company_id"]),
+                        row["year"],
+                        f"BS components ({comps}) don't reconcile with total_liabilities ({tl})",
+                    )
+                )
         return failures
 
     def dq13_coverage(self):
         """DQ-13 — minimum row coverage per table."""
         failures = []
         minimums = {
-            "companies": 1, "sectors": 1, "profitandloss": 10,
-            "balancesheet": 10, "cashflow": 10, "stock_prices": 10,
-            "analysis": 1, "documents": 1, "prosandcons": 1,
-            "financial_ratios": 10, "peer_groups": 1, "market_cap": 1,
+            "companies": 1,
+            "sectors": 1,
+            "profitandloss": 10,
+            "balancesheet": 10,
+            "cashflow": 10,
+            "stock_prices": 10,
+            "analysis": 1,
+            "documents": 1,
+            "prosandcons": 1,
+            "financial_ratios": 10,
+            "peer_groups": 1,
+            "market_cap": 1,
         }
         for table, minimum in minimums.items():
             try:
@@ -336,16 +521,30 @@ class DQValidator:
             except Exception:
                 cnt = 0
             if cnt < minimum:
-                failures.append(self._fail(
-                    "DQ-13", "WARNING", table, "row_count", None, None,
-                    f"Table {table} has {cnt} rows, minimum expected {minimum}",
-                ))
+                failures.append(
+                    self._fail(
+                        "DQ-13",
+                        "WARNING",
+                        table,
+                        "row_count",
+                        None,
+                        None,
+                        f"Table {table} has {cnt} rows, minimum expected {minimum}",
+                    )
+                )
         return failures
 
     def dq14_year_range(self):
         """DQ-14 — year values within 1990-2030."""
         failures = []
-        for table in ["profitandloss", "balancesheet", "cashflow", "financial_ratios", "market_cap", "documents"]:
+        for table in [
+            "profitandloss",
+            "balancesheet",
+            "cashflow",
+            "financial_ratios",
+            "market_cap",
+            "documents",
+        ]:
             try:
                 df = self._query(f'SELECT DISTINCT year FROM "{table}" WHERE year IS NOT NULL')
             except Exception:
@@ -353,10 +552,17 @@ class DQValidator:
             for _, row in df.iterrows():
                 yr = row["year"]
                 if yr is not None and (yr < 1990 or yr > 2030):
-                    failures.append(self._fail(
-                        "DQ-14", "WARNING", table, "year", None, int(yr),
-                        f"Year {yr} outside allowed range 1990-2030",
-                    ))
+                    failures.append(
+                        self._fail(
+                            "DQ-14",
+                            "WARNING",
+                            table,
+                            "year",
+                            None,
+                            int(yr),
+                            f"Year {yr} outside allowed range 1990-2030",
+                        )
+                    )
         return failures
 
     def dq15_no_duplicate_tickers(self):
@@ -371,10 +577,17 @@ class DQValidator:
         dupes = df[df.duplicated(subset=["ticker"], keep=False)]
         for ticker in dupes["ticker"].drop_duplicates().tolist():
             cnt = int((df["ticker"] == ticker).sum())
-            failures.append(self._fail(
-                "DQ-15", "WARNING", "companies", "ticker", None, None,
-                f"Duplicate ticker '{ticker}' found {cnt} times",
-            ))
+            failures.append(
+                self._fail(
+                    "DQ-15",
+                    "WARNING",
+                    "companies",
+                    "ticker",
+                    None,
+                    None,
+                    f"Duplicate ticker '{ticker}' found {cnt} times",
+                )
+            )
         return failures
 
     def dq16_market_cap_positive(self):
@@ -387,18 +600,32 @@ class DQValidator:
         for _, row in df.iterrows():
             mc = row["market_cap_crore"]
             if mc is not None and mc <= 0:
-                failures.append(self._fail(
-                    "DQ-16", "WARNING", "companies", "market_cap_crore",
-                    int(row["company_id"]), None,
-                    f"Non-positive market cap for {row['ticker']}: {mc}",
-                ))
+                failures.append(
+                    self._fail(
+                        "DQ-16",
+                        "WARNING",
+                        "companies",
+                        "market_cap_crore",
+                        int(row["company_id"]),
+                        None,
+                        f"Non-positive market cap for {row['ticker']}: {mc}",
+                    )
+                )
         return failures
 
     # ── Export ──────────────────────────────────────────────────────
 
     def export_failures(self, failures, path):
         os.makedirs(os.path.dirname(path) if os.path.dirname(path) else ".", exist_ok=True)
-        fieldnames = ["company_id", "field", "issue", "severity", "rule", "year", "table"]
+        fieldnames = [
+            "company_id",
+            "field",
+            "issue",
+            "severity",
+            "rule",
+            "year",
+            "table",
+        ]
         with open(path, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()

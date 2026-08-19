@@ -200,6 +200,40 @@ Every result gets a **composite quality score** (0-100) blending profitability, 
 
 ---
 
+## 🖥 Streamlit Dashboard (Sprint 4)
+
+Launch the interactive dashboard:
+
+```bash
+make dashboard          # streamlit run src/dashboard/app.py --server.port 8501
+# open http://localhost:8501
+```
+
+The app uses Streamlit's native multipage layout — use the **sidebar** to navigate the 8 screens:
+
+| Screen | Description |
+|--------|-------------|
+| **01 Home** | Market-wide KPIs (avg ROE, median P/E, median D/E, debt-free count), sector donut chart, top-5 by composite quality score, year selector |
+| **02 Profile** | Company search with autocomplete — company card, 6 KPI tiles, 10-year revenue/profit bars, ROE/ROCE dual-axis chart, pros & cons badges |
+| **03 Screener** | 6 preset buttons that auto-fill the sliders, 10 live threshold sliders, result count, CSV download |
+| **04 Peers** | Peer-group dropdown, radar chart (company vs group average), KPI table with benchmark row highlighted |
+| **05 Trends** | Up to 3 metrics overlaid on 10-year lines with YoY % annotations |
+| **06 Sectors** | Sector bubble chart (Revenue vs ROE, size = Market Cap, colour = sub-sector) + median KPI table |
+| **07 Capital** | Capital-allocation treemap across the 8 patterns, drill into companies per pattern |
+| **08 Reports** | Annual-report PDF links per year with 404 detection (red "Report unavailable" badge) |
+
+All DB queries are cached with `@st.cache_data(ttl=600)` in `src/dashboard/utils/db.py`.
+
+### Valuation module
+
+```bash
+make valuation          # python -m src.analytics.valuation
+```
+
+Computes FCF yield, 5-year median P/E, sector-median P/E, and Caution/Discount/Fair flags, exporting `output/valuation_summary.xlsx` (92 rows) and `output/valuation_flags.csv`.
+
+---
+
 ## 🔌 API Endpoints
 
 Start with `make api` or `uvicorn src.api:app --reload`.
@@ -265,6 +299,10 @@ nifty100-analytics/
 │   │   └── radar.py              # 8-axis polar radar charts
 │   ├── screener/
 │   │   └── engine.py             # Composite scoring + Excel export
+│   ├── dashboard/
+│   │   ├── app.py                # Streamlit entry point
+│   │   ├── pages/                # 8 screens (01_home … 08_reports)
+│   │   └── utils/db.py           # Cached data loader
 │   └── api.py                     # FastAPI with 5 endpoints
 ├── tests/
 │   ├── etl/test_normaliser.py     # 66 tests
@@ -306,7 +344,7 @@ nifty100-analytics/
 | `make report` | Run screener → Excel workbook |
 | `make test` | Run all 125 tests |
 | `make api` | Start FastAPI with hot reload |
-| `make dashboard` | Start API via `python -m src.api` |
+| `make dashboard` | Launch the Streamlit dashboard on http://localhost:8501 |
 | `make clean` | Wipe database, outputs, and caches |
 
 ---

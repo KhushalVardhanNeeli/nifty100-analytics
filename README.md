@@ -200,6 +200,45 @@ Every result gets a **composite quality score** (0-100) blending profitability, 
 
 ---
 
+## 📄 Reports & NLP (Sprint 5)
+
+### Cash Flow Intelligence
+
+```bash
+make intelligence        # python -m src.analytics.cashflow_kpis
+```
+
+Builds `output/cashflow_intelligence.xlsx` (CFO quality, CapEx intensity,
+FCF CAGR, distress & deleveraging flags per company), `output/distress_alerts.csv`,
+`output/capital_allocation_distribution.csv` and `output/pattern_changes.csv`
+(year-over-year pattern movements).
+
+### NLP — analysis parser & auto pros/cons
+
+```bash
+make nlp                # parser + pros/cons generator
+```
+
+- `src/nlp/parser.py` — parses `analysis.xlsx` text (e.g. `"10 Years: 21%"`) into
+  `output/analysis_parsed.csv`, logs non-matching text to `output/parse_failures.csv`,
+  and cross-checks parsed CAGR vs the ratio engine (`output/cagr_crosscheck.csv`).
+- `src/nlp/pros_cons_generator.py` — evaluates 12 pro + 12 con rules per company
+  (confidence > 60%) into `output/pros_cons_generated.csv` (≥1 pro and ≥1 con per company).
+
+### PDF reports
+
+```bash
+make reports            # tearsheets + sector reports + portfolio
+```
+
+- `reports/tearsheets/{ticker}_tearsheet.pdf` — 2-page company tearsheet
+  (KPIs, revenue/profit bars, ROE/ROCE trend, balance-sheet composition,
+  cash-flow waterfall, pros & cons). Skips companies with <3 years of data.
+- `reports/sector/{sector}_report.pdf` — per-sector median KPIs + company table.
+- `reports/portfolio/portfolio_summary.pdf` — one page per company with trend arrows.
+
+---
+
 ## 🖥 Streamlit Dashboard (Sprint 4)
 
 Launch the interactive dashboard:
@@ -341,7 +380,10 @@ nifty100-analytics/
 | `make ratios` | Compute all financial ratios |
 | `make export` | Export capital allocation + edge-case log |
 | `make radar` | Generate radar chart PNGs |
-| `make report` | Run screener → Excel workbook |
+| `make nlp` | Parse analysis + generate pros/cons |
+| `make reports` | Generate tearsheets, sector + portfolio PDFs |
+| `make intelligence` | Cash-flow intelligence exports |
+| `make valuation` | Valuation summary + flags |
 | `make test` | Run all 125 tests |
 | `make api` | Start FastAPI with hot reload |
 | `make dashboard` | Launch the Streamlit dashboard on http://localhost:8501 |

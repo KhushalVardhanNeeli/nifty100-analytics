@@ -35,10 +35,16 @@ valuation:
 
 # ── Sprint 5: NLP & Reports ─────────────────────────────────────
 reports:
-	python -m src.reports.generate
+	python -m src.reports.tearsheet
+	python -m src.reports.sector_report
+	python -m src.reports.portfolio
 
 nlp:
-	python -m src.nlp.analyzer
+	python -m src.nlp.parser
+	python -m src.nlp.pros_cons_generator
+
+intelligence:
+	python -m src.analytics.cashflow_kpis
 
 # ── Sprint 6: API, ML, Tests ─────────────────────────────────────
 api:
